@@ -1,3 +1,4 @@
+import threading
 import functools
 import logging
 
@@ -34,6 +35,24 @@ class Lock(Accessory):
         self.lock_target_state.set_value(self._lock_target_state, should_notify=True)
         self._lock_current_state = self._lock_target_state
         self.lock_current_state.set_value(self._lock_current_state, should_notify=True)
+        print("unlocked")
+
+        def delayed_lock_action():
+            # Assuming you want to simulate locking back or just print "locked"
+            # If you want to change the actual lock state, you'd modify
+            # self._lock_target_state and self._lock_current_state here
+            # and call set_value on the characteristics similar to above.
+            print("locked")
+            # Example: If you wanted to re-lock the device programmatically after 10s
+            # if self._lock_current_state == 0: # If currently unlocked
+            #     log.info("Automatically re-locking after 10 seconds.")
+            #     self._lock_target_state = 1
+            #     self.lock_target_state.set_value(self._lock_target_state, should_notify=True)
+            #     self._lock_current_state = self._lock_target_state
+            #     self.lock_current_state.set_value(self._lock_current_state, should_notify=True)
+
+        timer = threading.Timer(10.0, delayed_lock_action)
+        timer.start()
 
     def add_unpair_hook(self):
         unpair = self.driver.unpair
