@@ -64,6 +64,7 @@ class Lock(Accessory):
 
     def _trigger_gpio_unlock(self):
         """Raise GPIO pin high for the configured duration"""
+        log.info("test")
         if self.gpio_pin is None or not GPIO_AVAILABLE:
             return
 
