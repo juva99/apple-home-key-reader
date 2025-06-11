@@ -52,7 +52,6 @@ def configure_nfc_device(config: dict):
 
 
 def configure_homekey_service(config: dict, nfc_device, repository=None):
-    gpio_config = config.get("gpio", {})
     service = Service(
         nfc_device,
         repository=repository or Repository(config["persist"]),
@@ -62,8 +61,6 @@ def configure_homekey_service(config: dict, nfc_device, repository=None):
         # Poll no more than ~6 times a second by default
         throttle_polling=float(config.get("throttle_polling") or 0.15),
         lock_timeout=int(config.get("lock_timeout", 10)),
-        gpio_pin=gpio_config.get("pin"),
-        gpio_duration=float(gpio_config.get("duration", 2.0)),
     )
     return service
 

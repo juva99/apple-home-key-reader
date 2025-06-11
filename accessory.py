@@ -73,7 +73,9 @@ class Lock(Accessory):
                     f"Triggering GPIO pin {self.gpio_pin} HIGH for {self.gpio_duration}s"
                 )
                 GPIO.output(self.gpio_pin, GPIO.HIGH)
+                log.info(f"GPIO pin {self.gpio_pin} set to HIGH")
                 time.sleep(self.gpio_duration)
+                log.info(f"Setting GPIO pin {self.gpio_pin} back to LOW")
                 GPIO.output(self.gpio_pin, GPIO.LOW)
                 log.info(f"GPIO pin {self.gpio_pin} returned to LOW")
             except Exception as e:
