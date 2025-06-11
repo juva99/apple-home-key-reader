@@ -45,6 +45,7 @@ class Lock(Accessory):
         self.service.on_endpoint_authenticated = self.on_endpoint_authenticated
 
         # GPIO configuration - use lock_timeout as default duration
+        log.info(f"Configuring GPIO pin {gpio_pin}")
         self.gpio_pin = gpio_pin
         self.gpio_duration = (
             gpio_duration if gpio_duration is not None else service.lock_timeout
