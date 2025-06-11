@@ -18,6 +18,12 @@
         "persist": "homekey.json",
         "express": true,
         "finish": "silver",
-        "flow": "fast"
+        "flow": "fast",
+        "lock_timeout": 10
+    },
+
+    "gpio": {
+        "pin": 18,
+        "duration": 2.0
     }
 }

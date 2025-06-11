@@ -1,6 +1,16 @@
 import threading
 import functools
 import logging
+import time
+
+# Add GPIO import
+try:
+    import RPi.GPIO as GPIO
+
+    GPIO_AVAILABLE = True
+except ImportError:
+    GPIO_AVAILABLE = False
+    logging.getLogger().warning("RPi.GPIO not available - GPIO functionality disabled")
 
 from pyhap.accessory import Accessory
 from pyhap.const import CATEGORY_DOOR_LOCK
@@ -14,45 +24,104 @@ log = logging.getLogger()
 class Lock(Accessory):
     category = CATEGORY_DOOR_LOCK
 
-    def __init__(self, *args, service: Service, lock_state_at_startup=1, **kwargs):
+    def __init__(
+        self,
+        *args,
+        service: Service,
+        lock_state_at_startup=1,
+        gpio_pin: int = None,
+        gpio_duration: float = None,
+        **kwargs,
+    ):
         super().__init__(*args, **kwargs)
         self._last_client_public_keys = None
 
-        self._lock_target_state = lock_state_at_startup
-        self._lock_current_state = lock_state_at_startup
+        # Gate lock is always locked by default (1 = locked, 0 = unlocked)
+        self._lock_target_state = 1
+        self._lock_current_state = 1
+        self._auto_lock_timer = None
 
         self.service = service
         self.service.on_endpoint_authenticated = self.on_endpoint_authenticated
+
+        # GPIO configuration - use lock_timeout as default duration
+        self.gpio_pin = gpio_pin
+        self.gpio_duration = (
+            gpio_duration if gpio_duration is not None else service.lock_timeout
+        )
+
+        if self.gpio_pin is not None and GPIO_AVAILABLE:
+            GPIO.setmode(GPIO.BCM)
+            GPIO.setup(self.gpio_pin, GPIO.OUT)
+            GPIO.output(self.gpio_pin, GPIO.LOW)
+            log.info(f"GPIO pin {self.gpio_pin} configured for unlock signaling")
+        elif self.gpio_pin is not None and not GPIO_AVAILABLE:
+            log.warning("GPIO pin configured but RPi.GPIO not available")
+
         self.add_lock_service()
         self.add_nfc_access_service()
         self.add_unpair_hook()
 
+    def _trigger_gpio_unlock(self):
+        """Raise GPIO pin high for the configured duration"""
+        if self.gpio_pin is None or not GPIO_AVAILABLE:
+            return
+
+        def gpio_unlock_thread():
+            try:
+                log.info(
+                    f"Triggering GPIO pin {self.gpio_pin} HIGH for {self.gpio_duration}s"
+                )
+                GPIO.output(self.gpio_pin, GPIO.HIGH)
+                time.sleep(self.gpio_duration)
+                GPIO.output(self.gpio_pin, GPIO.LOW)
+                log.info(f"GPIO pin {self.gpio_pin} returned to LOW")
+            except Exception as e:
+                log.error(f"Failed to control GPIO pin {self.gpio_pin}: {e}")
+
+        # Run GPIO control in separate thread to avoid blocking
+        gpio_thread = threading.Thread(target=gpio_unlock_thread, daemon=True)
+        gpio_thread.start()
+
+    def _cancel_auto_lock_timer(self):
+        """Cancel any existing auto-lock timer"""
+        if self._auto_lock_timer is not None:
+            self._auto_lock_timer.cancel()
+            self._auto_lock_timer = None
+
+    def _start_auto_lock_timer(self):
+        """Start the auto-lock timer"""
+        self._cancel_auto_lock_timer()
+
+        def auto_lock():
+            log.info(f"Auto-locking after {self.service.lock_timeout} seconds")
+            self._lock_target_state = 1
+            self._lock_current_state = 1
+            self.lock_target_state.set_value(
+                self._lock_target_state, should_notify=True
+            )
+            self.lock_current_state.set_value(
+                self._lock_current_state, should_notify=True
+            )
+            print("locked (auto)")
+            self._auto_lock_timer = None
+
+        self._auto_lock_timer = threading.Timer(self.service.lock_timeout, auto_lock)
+        self._auto_lock_timer.start()
+
     def on_endpoint_authenticated(self, endpoint):
-        self._lock_target_state = 0 if self._lock_current_state else 1
-        log.info(
-            f"Toggling lock state due to endpoint authentication event {self._lock_target_state} -> {self._lock_current_state} {endpoint}"
-        )
+        log.info(f"Unlocking due to endpoint authentication: {endpoint}")
+        self._lock_target_state = 0
+        self._lock_current_state = 0
         self.lock_target_state.set_value(self._lock_target_state, should_notify=True)
-        self._lock_current_state = self._lock_target_state
         self.lock_current_state.set_value(self._lock_current_state, should_notify=True)
-        print("unlocked")
+        print("unlocked (NFC)")
 
-        def delayed_lock_action():
-            # Assuming you want to simulate locking back or just print "locked"
-            # If you want to change the actual lock state, you'd modify
-            # self._lock_target_state and self._lock_current_state here
-            # and call set_value on the characteristics similar to above.
-            print("locked")
-            # Example: If you wanted to re-lock the device programmatically after 10s
-            # if self._lock_current_state == 0: # If currently unlocked
-            #     log.info("Automatically re-locking after 10 seconds.")
-            #     self._lock_target_state = 1
-            #     self.lock_target_state.set_value(self._lock_target_state, should_notify=True)
-            #     self._lock_current_state = self._lock_target_state
-            #     self.lock_current_state.set_value(self._lock_current_state, should_notify=True)
+        # Trigger GPIO unlock
+        self._trigger_gpio_unlock()
 
-        timer = threading.Timer(10.0, delayed_lock_action)
-        timer.start()
+        # Start auto-lock timer
+        self._start_auto_lock_timer()
 
     def add_unpair_hook(self):
         unpair = self.driver.unpair
@@ -152,8 +221,18 @@ class Lock(Accessory):
 
     def set_lock_target_state(self, value):
         log.info(f"set_lock_target_state {value}")
-        self._lock_target_state = self._lock_current_state = value
+        self._lock_target_state = value
+        self._lock_current_state = value
         self.lock_current_state.set_value(self._lock_current_state, should_notify=True)
+
+        if value == 0:  # Unlocked manually via Home app
+            print("unlocked (manual)")
+            self._trigger_gpio_unlock()
+            self._start_auto_lock_timer()
+        else:  # Locked manually via Home app
+            print("locked (manual)")
+            self._cancel_auto_lock_timer()
+
         return self._lock_target_state
 
     def get_lock_version(self):
@@ -196,3 +275,13 @@ class Lock(Accessory):
     def on_unpair(self, client_id):
         log.info(f"on_unpair {client_id}")
         self._update_hap_pairings()
+
+    def __del__(self):
+        """Cleanup GPIO when object is destroyed"""
+        if self.gpio_pin is not None and GPIO_AVAILABLE:
+            try:
+                GPIO.output(self.gpio_pin, GPIO.LOW)
+                GPIO.cleanup(self.gpio_pin)
+                log.info(f"GPIO pin {self.gpio_pin} cleaned up")
+            except Exception as e:
+                log.error(f"Failed to cleanup GPIO pin {self.gpio_pin}: {e}")

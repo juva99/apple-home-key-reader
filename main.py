@@ -36,7 +36,7 @@ def configure_hap_accessory(config: dict, homekey_service=None):
         driver,
         "NFC Lock",
         service=homekey_service,
-        lock_state_at_startup=int(config.get("default") != "unlocked")
+        lock_state_at_startup=int(config.get("default") != "unlocked"),
     )
     driver.add_accessory(accessory=accessory)
     return driver, accessory
@@ -44,13 +44,15 @@ def configure_hap_accessory(config: dict, homekey_service=None):
 
 def configure_nfc_device(config: dict):
     clf = BroadcastFrameContactlessFrontend(
-        path=config.get("path", None) or f"tty:{config.get('port')}:{config.get('driver')}",
+        path=config.get("path", None)
+        or f"tty:{config.get('port')}:{config.get('driver')}",
         broadcast_enabled=config.get("broadcast", True),
     )
     return clf
 
 
 def configure_homekey_service(config: dict, nfc_device, repository=None):
+    gpio_config = config.get("gpio", {})
     service = Service(
         nfc_device,
         repository=repository or Repository(config["persist"]),
@@ -59,6 +61,9 @@ def configure_homekey_service(config: dict, nfc_device, repository=None):
         flow=config.get("flow"),
         # Poll no more than ~6 times a second by default
         throttle_polling=float(config.get("throttle_polling") or 0.15),
+        lock_timeout=int(config.get("lock_timeout", 10)),
+        gpio_pin=gpio_config.get("pin"),
+        gpio_duration=float(gpio_config.get("duration", 2.0)),
     )
     return service
 

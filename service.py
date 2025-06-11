@@ -46,12 +46,14 @@ class Service:
         express: bool = True,
         finish: str = "silver",
         flow: str = "fast",
-        throttle_polling = 0.1
+        throttle_polling=0.1,
+        lock_timeout: int = 10,
     ) -> None:
         self.repository = repository
         self.clf = clf
         self.throttle_polling = throttle_polling
         self.express = express in (True, "True", "true", "1")
+        self.lock_timeout = lock_timeout
 
         try:
             self.hardware_finish_color = HardwareFinishColor[finish.upper()]
@@ -74,6 +76,7 @@ class Service:
     def on_endpoint_authenticated(self, endpoint):
         """This method will be called when an endpoint is authenticated"""
         # Currently overwritten by accessory.py
+        pass
 
     def start(self):
         self._runner = create_runner(
