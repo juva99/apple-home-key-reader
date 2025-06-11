@@ -64,8 +64,8 @@ class Lock(Accessory):
 
     def _trigger_gpio_unlock(self):
         """Raise GPIO pin high for the configured duration"""
-        log.info("test")
         if self.gpio_pin is None or not GPIO_AVAILABLE:
+            log.info("test")
             return
 
         def gpio_unlock_thread():
@@ -84,6 +84,7 @@ class Lock(Accessory):
 
         # Run GPIO control in separate thread to avoid blocking
         gpio_thread = threading.Thread(target=gpio_unlock_thread, daemon=True)
+        log.info("test2")
         gpio_thread.start()
 
     def _cancel_auto_lock_timer(self):
