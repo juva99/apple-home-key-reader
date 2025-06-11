@@ -24,6 +24,5 @@
         "finish": "silver",
         "flow": "fast",
         "lock_timeout": 10
-    },
-
+    }
 }
