@@ -11,7 +11,11 @@
     "hap": {
         "port": 51926,
         "persist": "hap.state",
-        "default": "locked"
+        "default": "locked",
+        "gpio": {
+            "pin": 18,
+            "duration": 10
+        }
     },
 
     "homekey": {
@@ -22,8 +26,4 @@
         "lock_timeout": 10
     },
 
-    "gpio": {
-        "pin": 18,
-        "duration": 10
-    }
 }
