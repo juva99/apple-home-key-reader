@@ -32,6 +32,8 @@ def configure_logging(config: dict):
 
 def configure_hap_accessory(config: dict, homekey_service=None):
     driver = AccessoryDriver(port=config["port"], persist_file=config["persist"])
+    print(config)
+    print(f"gpio pin: {config.get('gpio', {}).get('pin', None)}")
     accessory = Lock(
         driver,
         "NFC Lock",
