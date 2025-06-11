@@ -37,7 +37,6 @@ def configure_hap_accessory(config: dict, homekey_service=None):
         "NFC Lock",
         service=homekey_service,
         lock_state_at_startup=int(config.get("default") != "unlocked"),
-        lock_timeout=int(config.get("lock_timeout", 10)),
         gpio_pin=config.get("gpio_pin", None),
     )
     driver.add_accessory(accessory=accessory)
