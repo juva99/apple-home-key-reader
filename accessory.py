@@ -5,7 +5,7 @@ import time
 
 # Add GPIO import
 try:
-    import RPi.GPIO as GPIO
+    from gpiozero import LED
 
     GPIO_AVAILABLE = True
 except ImportError:
@@ -52,9 +52,6 @@ class Lock(Accessory):
         )
 
         if self.gpio_pin is not None and GPIO_AVAILABLE:
-            GPIO.setmode(GPIO.BCM)
-            GPIO.setup(self.gpio_pin, GPIO.OUT)
-            GPIO.output(self.gpio_pin, GPIO.LOW)
             log.info(f"GPIO pin {self.gpio_pin} configured for unlock signaling")
         elif self.gpio_pin is not None and not GPIO_AVAILABLE:
             log.warning("GPIO pin configured but RPi.GPIO not available")
@@ -74,18 +71,17 @@ class Lock(Accessory):
                 log.info(
                     f"Triggering GPIO pin {self.gpio_pin} HIGH for {self.gpio_duration}s"
                 )
-                GPIO.output(self.gpio_pin, GPIO.HIGH)
+                relay = LED(self.gpio_pin)
                 log.info(f"GPIO pin {self.gpio_pin} set to HIGH")
                 time.sleep(self.gpio_duration)
                 log.info(f"Setting GPIO pin {self.gpio_pin} back to LOW")
-                GPIO.output(self.gpio_pin, GPIO.LOW)
+                del relay
                 log.info(f"GPIO pin {self.gpio_pin} returned to LOW")
             except Exception as e:
                 log.error(f"Failed to control GPIO pin {self.gpio_pin}: {e}")
 
         # Run GPIO control in separate thread to avoid blocking
         gpio_thread = threading.Thread(target=gpio_unlock_thread, daemon=True)
-        log.info("test2")
         gpio_thread.start()
 
     def _cancel_auto_lock_timer(self):
