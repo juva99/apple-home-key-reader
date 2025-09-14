@@ -71,6 +71,50 @@ Other OS + Python version combos were not verified but may still work.
     python3 main.py
     ```
 
+# HomeKit Reconnection Tools
+
+If you need to reconnect to HomeKit after initial setup, or if your HomeKit connection is lost, use the provided reconnection tools:
+
+## Quick Reconnection
+
+**For users who want a simple solution:**
+```bash
+# Check current status
+python3 reconnect_homekit_standalone.py --check-status
+
+# Show setup information and instructions
+python3 reconnect_homekit_standalone.py --show-info
+
+# Reset pairing if needed (removes all HomeKit pairings)
+python3 reconnect_homekit_standalone.py --reset-pairing
+```
+
+**For interactive use:**
+- Windows users: Run `reconnect_homekit.bat`
+- Linux/macOS users: Run `./reconnect_homekit.sh`
+
+## Advanced Reconnection (requires all dependencies)
+
+If you have all project dependencies installed:
+```bash
+# Install QR code support (optional)
+pip install -r requirements_reconnect.txt
+
+# Full feature reconnection tool
+python3 reconnect_homekit.py --check-status
+python3 reconnect_homekit.py --show-qr
+python3 reconnect_homekit.py --restart-service
+```
+
+## Common Reconnection Scenarios
+
+1. **"No Response" in Home app**: Use `--check-status` then try restarting the main application
+2. **Lock disappeared from Home app**: Check pairing status, may need to re-add accessory
+3. **Complete reset needed**: Use `--reset-pairing` then add accessory again in Home app
+4. **Moving to different HomeKit home**: Remove from current home, reset pairing, add to new home
+
+📖 For detailed instructions, see [HOMEKIT_RECONNECTION_GUIDE.md](HOMEKIT_RECONNECTION_GUIDE.md)
+
 # Configuration
 
 Configuration is done via a JSON file `configuration.json`, with the following 5 blocks configurable:

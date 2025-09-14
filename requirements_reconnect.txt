@@ -1,0 +1,2 @@
+# Additional requirements for the HomeKit reconnection tool
+qrcode[pil]>=7.0.0
