@@ -1,3 +1,4 @@
+import argparse
 import json
 import logging
 import signal
@@ -16,6 +17,16 @@ CONFIGURATION_FILE_PATH = "configuration.json"
 
 def load_configuration(path=CONFIGURATION_FILE_PATH) -> dict:
     return json.load(open(path, "r+"))
+
+
+def parse_arguments():
+    parser = argparse.ArgumentParser(description="Apple Home Key Reader")
+    parser.add_argument(
+        "--pair", 
+        action="store_true", 
+        help="Enable pair mode for device pairing"
+    )
+    return parser.parse_args()
 
 
 def configure_logging(config: dict):
@@ -68,13 +79,16 @@ def configure_homekey_service(config: dict, nfc_device, repository=None):
     return service
 
 
-def main():
+def main(pair_mode = False):
     config = load_configuration()
     log = configure_logging(config["logging"])
 
     nfc_device = configure_nfc_device(config["nfc"])
     homekey_service = configure_homekey_service(config["homekey"], nfc_device)
-    hap_driver, _ = configure_hap_accessory(config["hap"], homekey_service)
+    hap_driver, lock = configure_hap_accessory(config["hap"], homekey_service)
+
+    if pair_mode:
+        lock.setup_message()
 
     for s in (signal.SIGINT, signal.SIGTERM):
         signal.signal(
@@ -91,4 +105,5 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    args = parse_arguments()
+    main(pair_mode=args.pair)
