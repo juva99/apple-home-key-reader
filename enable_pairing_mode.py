@@ -54,6 +54,38 @@ def enable_pairing_mode(duration_seconds=600):
         
         print(f"✅ Pairing mode enabled!")
         print(f"⏰ Will automatically disable after {duration_seconds} seconds")
+        
+        # Now try to get setup information after enabling pairing mode
+        print("\n🔍 Getting setup information...")
+        try:
+            # Re-read the modified state to get setup info
+            with open(hap_state_file, 'r') as f:
+                updated_state = json.load(f)
+            
+            setup_id = updated_state.get('setup_id')
+            if setup_id:
+                formatted_code = f"{setup_id[:3]}-{setup_id[3:5]}-{setup_id[5:]}"
+                qr_uri = f"X-HM://{setup_id}"
+                
+                print("\n🔗 HomeKit Setup Information")
+                print("=" * 50)
+                print(f"📋 Setup Code: {formatted_code}")
+                print(f"🔗 QR URI: {qr_uri}")
+                print("\n📱 To pair with HomeKit:")
+                print("1. Open the Home app on your iOS device")
+                print("2. Tap '+' to add an accessory")
+                print("3. Choose 'Add Accessory'")
+                print(f"4. Enter setup code: {formatted_code}")
+                print("   OR scan a QR code generated from the URI above")
+                print("=" * 50)
+            else:
+                print("📋 Setup code will be generated when HAP driver restarts")
+                print("💡 You may need to restart your main service to see the setup code")
+                
+        except Exception as e:
+            print(f"⚠️ Could not get setup info immediately: {e}")
+            print("💡 The setup code will be available when your HAP service restarts")
+        
         print("⚠️  Press Ctrl+C to disable immediately")
         
         # Set up signal handler for graceful shutdown
@@ -91,44 +123,119 @@ def enable_pairing_mode(duration_seconds=600):
         return False
 
 def show_current_setup_info():
-    """Show setup code and QR information from current HAP state"""
+    """Show setup code and QR information by initializing HAP components"""
     import json
     import os
     
-    hap_state_file = "hap.state"
-    
-    if not os.path.exists(hap_state_file):
-        print("❌ HAP state file not found")
-        return False
-    
     try:
-        with open(hap_state_file, 'r') as f:
-            state = json.load(f)
+        # Load configuration to get HAP settings
+        with open("configuration.json", 'r') as f:
+            config = json.load(f)
         
-        setup_id = state.get('setup_id')
-        if setup_id:
-            formatted_code = f"{setup_id[:3]}-{setup_id[3:5]}-{setup_id[5:]}"
-            qr_uri = f"X-HM://{setup_id}"
-            
+        # Initialize HAP driver to get setup information
+        from pyhap.accessory_driver import AccessoryDriver
+        from accessory import Lock
+        from service import Service
+        from repository import Repository
+        from util.bfclf import BroadcastFrameContactlessFrontend
+        
+        # Create minimal components needed for setup info
+        repository = Repository(config["homekey"]["persist"])
+        nfc_device = BroadcastFrameContactlessFrontend(
+            path=config.get("nfc", {}).get("path", None) or 
+                 f"tty:{config.get('nfc', {}).get('port')}:{config.get('nfc', {}).get('driver')}",
+            broadcast_enabled=False,  # Don't need broadcast for setup info
+        )
+        service = Service(
+            clf=nfc_device,
+            repository=repository,
+            express=config.get("homekey", {}).get("express", True),
+            finish=config.get("homekey", {}).get("finish", "silver"),
+            flow=config.get("homekey", {}).get("flow", "fast"),
+            throttle_polling=0.15,
+            lock_timeout=10,
+        )
+        
+        # Create HAP driver (but don't start it)
+        driver = AccessoryDriver(
+            port=config["hap"]["port"], 
+            persist_file=config["hap"]["persist"]
+        )
+        
+        accessory = Lock(
+            driver,
+            "NFC Lock",
+            service=service,
+            lock_state_at_startup=1,
+            gpio_pin=config.get("hap", {}).get("gpio", {}).get("pin", None),
+        )
+        
+        service.set_accessory_reference(accessory)
+        driver.add_accessory(accessory=accessory)
+        
+        # Get setup information from the accessory
+        pairing_info = accessory.get_pairing_info()
+        
+        if pairing_info:
             print("\n🔗 HomeKit Setup Information")
             print("=" * 50)
-            print(f"📋 Setup Code: {formatted_code}")
-            print(f"🔗 QR URI: {qr_uri}")
+            print(f"📋 Setup Code: {pairing_info['formatted_setup_code']}")
+            print(f"🔗 QR URI: {pairing_info['qr_uri']}")
             print("\n📱 To pair with HomeKit:")
             print("1. Open the Home app on your iOS device")
             print("2. Tap '+' to add an accessory")
             print("3. Choose 'Add Accessory'")
-            print(f"4. Enter setup code: {formatted_code}")
+            print(f"4. Enter setup code: {pairing_info['formatted_setup_code']}")
             print("   OR scan a QR code generated from the URI above")
+            
+            # Try to show QR code if possible
+            try:
+                import qrcode
+                qr = qrcode.QRCode(version=1, box_size=1, border=1)
+                qr.add_data(pairing_info['qr_uri'])
+                qr.make(fit=True)
+                print("\n📋 QR Code:")
+                qr.print_ascii(invert=True)
+            except ImportError:
+                print(f"\n📋 Generate QR code from: {pairing_info['qr_uri']}")
+                print("   (Install 'qrcode' package to display QR code directly)")
+            
             print("=" * 50)
             return True
         else:
-            print("⚠️ No setup code found in HAP state")
+            print("⚠️ Could not retrieve setup information")
             return False
             
     except Exception as e:
-        print(f"❌ Failed to read setup info: {e}")
-        return False
+        print(f"❌ Failed to get setup info: {e}")
+        
+        # Fallback: try to read from HAP state file
+        hap_state_file = "hap.state"
+        if os.path.exists(hap_state_file):
+            try:
+                with open(hap_state_file, 'r') as f:
+                    state = json.load(f)
+                
+                # Check if there's a setup_id in the state
+                setup_id = state.get('setup_id')
+                if setup_id:
+                    formatted_code = f"{setup_id[:3]}-{setup_id[3:5]}-{setup_id[5:]}"
+                    qr_uri = f"X-HM://{setup_id}"
+                    
+                    print(f"📋 Setup Code: {formatted_code}")
+                    print(f"🔗 QR URI: {qr_uri}")
+                    return True
+                else:
+                    print("⚠️ No setup code found in HAP state")
+                    print("💡 This is normal if the device is already paired and not in pairing mode")
+                    return False
+                    
+            except Exception as e2:
+                print(f"❌ Failed to read HAP state: {e2}")
+                return False
+        else:
+            print("❌ HAP state file not found")
+            return False
 
 def main():
     """Main script entry point"""
