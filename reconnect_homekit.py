@@ -176,9 +176,20 @@ class HomeKitReconnector:
                 persist_file=self.config["hap"]["persist"]
             )
             
-            # Get setup URI and code
-            setup_uri = temp_driver.state.setup_uri
-            setup_code = temp_driver.state.setup_code
+            # Get setup code from different possible attributes
+            setup_code = None
+            setup_uri = None
+            
+            if hasattr(temp_driver.state, 'setup_code'):
+                setup_code = temp_driver.state.setup_code
+            elif hasattr(temp_driver.state, 'setup_id'):
+                setup_code = temp_driver.state.setup_id
+            elif hasattr(temp_driver.state, 'pincode'):
+                setup_code = temp_driver.state.pincode
+            
+            # Construct setup URI if we have a setup code
+            if setup_code:
+                setup_uri = f"X-HM://{setup_code}"
             
             if setup_code:
                 print(f"📍 HomeKit Setup PIN: {setup_code}")
@@ -233,6 +244,10 @@ class HomeKitReconnector:
             print("• Make sure the configuration file exists")
             print("• Try resetting the pairing first")
             print("• Ensure the service is not already running")
+            print("• If you see 'setup_uri' errors, restart the main application:")
+            print("  1. Stop any running instances of main.py")
+            print("  2. Run: python3 main.py")
+            print("  3. Look for the setup code in console output")
     
     def restart_service(self):
         """Restart the HomeKit service with current configuration"""

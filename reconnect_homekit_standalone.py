@@ -210,7 +210,14 @@ class SimpleHomeKitReconnector:
                     port=self.config["hap"]["port"], 
                     persist_file=self.config["hap"]["persist"]
                 )
-                current_pin = temp_driver.state.setup_code
+                
+                # Try different attributes for setup code
+                if hasattr(temp_driver.state, 'setup_code'):
+                    current_pin = temp_driver.state.setup_code
+                elif hasattr(temp_driver.state, 'setup_id'):
+                    current_pin = temp_driver.state.setup_id
+                elif hasattr(temp_driver.state, 'pincode'):
+                    current_pin = temp_driver.state.pincode
         except Exception:
             pass  # Ignore errors when trying to get PIN
         

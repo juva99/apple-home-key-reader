@@ -57,6 +57,12 @@ This will show:
 - ASCII QR code displayed in the terminal (if qrcode package is installed)
 - Setup URI for advanced users
 
+**Note**: If you see an error about 'setup_uri' or 'setup_code', this means the HomeKit state needs to be refreshed. In this case:
+1. Stop any running instances of the main application
+2. Restart the main application: `python3 main.py`
+3. Look for the setup code in the console output
+4. Use that code to add the accessory in the Home app
+
 For a lightweight option that shows the PIN without requiring all dependencies:
 
 ```bash
@@ -142,6 +148,15 @@ python3 reconnect_homekit.py --repair-config
 3. Add to new home using setup code
 
 ## Troubleshooting
+
+### Setup Code/URI Errors
+If you see errors like "'State' object has no attribute 'setup_uri'" or "'State' object has no attribute 'setup_code'":
+1. This means the HomeKit state file is outdated or incompatible
+2. Stop any running instances of `main.py`
+3. Optionally backup the current `hap.state` file
+4. Restart the main application: `python3 main.py`
+5. Look for the new setup code in the console output
+6. Use the new code to add the accessory in the Home app
 
 ### Port Already in Use
 If you get a "port already in use" error:
