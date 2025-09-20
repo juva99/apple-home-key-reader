@@ -71,6 +71,10 @@ def configure_homekey_service(config: dict, nfc_device, repository=None):
 
 def pair_mode(timeout=60):
     """Run in pairing mode to connect new HomeKit devices"""
+    import os
+    import tempfile
+    import shutil
+
     config = load_configuration()
     log = configure_logging(config["logging"])
 
@@ -79,20 +83,41 @@ def pair_mode(timeout=60):
     nfc_device = configure_nfc_device(config["nfc"])
     homekey_service = configure_homekey_service(config["homekey"], nfc_device)
 
-    # Create a temporary HAP accessory to display QR code and pairing info
-    hap_driver, _ = configure_hap_accessory(config["hap"], homekey_service)
-
-    print("\n🔗 HomeKit Pairing Mode Active")
-    print("=" * 50)
-    print("The HomeKit accessory is now discoverable!")
-    print("You can add it to your Home app using the QR code above.")
-    print(f"Pairing will timeout in {timeout} seconds.")
-    print("Present your device to the NFC reader to complete setup.")
-    print("=" * 50)
+    # Create a temporary HAP state file to force QR code display
+    original_persist_file = config["hap"]["persist"]
+    temp_persist_file = None
 
     try:
+        # Create temporary persist file for pairing mode with empty JSON
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".state", delete=False
+        ) as tmp:
+            tmp.write("{}")  # Write empty JSON to avoid parsing errors
+            temp_persist_file = tmp.name
+
+        # Modify config to use temporary persist file
+        temp_config = config.copy()
+        temp_config["hap"] = config["hap"].copy()
+        temp_config["hap"]["persist"] = temp_persist_file
+
+        # Create a temporary HAP accessory to display QR code and pairing info
+        hap_driver, _ = configure_hap_accessory(temp_config["hap"], homekey_service)
+
+        print("\n🔗 HomeKit Pairing Mode Active")
+        print("=" * 50)
+        print("Starting HAP accessory - QR code will appear below...")
+        print("You can add it to your Home app using the QR code.")
+        print(f"Pairing will timeout in {timeout} seconds.")
+        print("Present your device to the NFC reader to complete setup.")
+        print("=" * 50)
+
         # Start HAP driver to show QR code
         hap_driver.start()
+
+        # Give the HAP driver a moment to display QR code
+        import time
+
+        time.sleep(2)
 
         # Run NFC pairing
         success = homekey_service.pair_new_device(timeout_seconds=timeout)
@@ -106,6 +131,7 @@ def pair_mode(timeout=60):
         else:
             print("❌ Pairing timeout - no device was paired")
             return 1
+
     except Exception as e:
         log.error(f"Pairing failed: {e}")
         print(f"❌ Pairing failed: {e}")
@@ -115,6 +141,13 @@ def pair_mode(timeout=60):
         except:
             pass
         return 1
+    finally:
+        # Clean up temporary persist file
+        if temp_persist_file and os.path.exists(temp_persist_file):
+            try:
+                os.unlink(temp_persist_file)
+            except:
+                pass
 
 
 def main_service():
