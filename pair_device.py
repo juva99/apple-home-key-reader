@@ -21,6 +21,7 @@ import argparse
 import json
 import logging
 import sys
+import threading
 from pathlib import Path
 
 # Configure logging
@@ -92,8 +93,6 @@ def setup_components(config):
     
     return nfc_device, service, driver, accessory
 
-    return nfc_device, service, driver, accessory
-
 def show_pairing_status(service):
     """Show current pairing mode status and information"""
     print("\n📊 Current Pairing Status")
@@ -112,7 +111,7 @@ def show_pairing_status(service):
     
     print("=" * 50)
 
-def pair_new_device(service, timeout_seconds, show_qr, duration_seconds):
+def pair_new_device(service, driver, timeout_seconds, show_qr, duration_seconds):
     """Main pairing function"""
     print(f"\n🚀 Starting HomeKit Re-Pairing Session")
     print("=" * 60)
@@ -270,6 +269,8 @@ Examples:
         
         # Handle different modes
         if args.status:
+            # For status, we don't need to start the full HAP driver
+            print("\n📊 Checking pairing status...")
             show_pairing_status(service)
             return 0
         
@@ -279,18 +280,50 @@ Examples:
         
         # Start HAP driver for pairing
         print("\n🚀 Starting HAP driver...")
-        driver.start()
+        
+        # Use a result container to capture the pairing result
+        result_container = {'success': False, 'completed': False}
+        
+        def run_pairing():
+            """Run pairing logic in separate thread"""
+            try:
+                # Give the HAP driver a moment to start up
+                import time
+                time.sleep(3)
+                
+                # Main pairing operation
+                show_qr = not args.no_qr
+                result_container['success'] = pair_new_device(service, driver, args.timeout, show_qr, args.duration)
+                result_container['completed'] = True
+                
+                # Stop the driver after pairing attempt
+                driver.stop()
+                
+            except Exception as e:
+                log.error(f"Pairing thread failed: {e}")
+                result_container['completed'] = True
+                driver.stop()
+        
+        # Start pairing in background thread
+        pairing_thread = threading.Thread(target=run_pairing, daemon=True)
+        pairing_thread.start()
         
         try:
-            # Main pairing operation
-            show_qr = not args.no_qr
-            success = pair_new_device(service, args.timeout, show_qr, args.duration)
-            
-            return 0 if success else 1
-            
-        finally:
-            print("\n🛑 Stopping HAP driver...")
+            # Start the HAP driver (this will block until stopped)
+            driver.start()
+        except KeyboardInterrupt:
+            print("\n\n🛑 Interrupted by user")
             driver.stop()
+            result_container['completed'] = True
+        except Exception as e:
+            log.error(f"HAP driver error: {e}")
+            driver.stop()
+            result_container['completed'] = True
+        
+        # Wait for pairing thread to complete
+        pairing_thread.join(timeout=10)
+        
+        return 0 if result_container.get('success', False) else 1
             
     except Exception as e:
         log.error(f"Script failed: {e}")
