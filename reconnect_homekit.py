@@ -180,14 +180,29 @@ class HomeKitReconnector:
             setup_code = None
             setup_uri = None
             
-            if hasattr(temp_driver.state, 'setup_code'):
-                setup_code = temp_driver.state.setup_code
-            elif hasattr(temp_driver.state, 'setup_id'):
-                setup_code = temp_driver.state.setup_id
-            elif hasattr(temp_driver.state, 'pincode'):
-                setup_code = temp_driver.state.pincode
+            # Try different ways to get the setup code and validate it
+            if hasattr(temp_driver.state, 'pincode') and temp_driver.state.pincode:
+                raw_pincode = str(temp_driver.state.pincode)
+                if raw_pincode.isdigit() and len(raw_pincode) == 8:
+                    setup_code = raw_pincode
+                else:
+                    print(f"⚠️  Invalid pincode format: {raw_pincode} (must be 8 digits)")
+                    
+            elif hasattr(temp_driver.state, 'setup_id') and temp_driver.state.setup_id:
+                raw_setup_id = str(temp_driver.state.setup_id)
+                if raw_setup_id.isdigit() and len(raw_setup_id) == 8:
+                    setup_code = raw_setup_id
+                else:
+                    print(f"⚠️  Invalid setup_id format: {raw_setup_id} (must be 8 digits)")
+                    
+            elif hasattr(temp_driver.state, 'setup_code') and temp_driver.state.setup_code:
+                raw_setup_code = str(temp_driver.state.setup_code)
+                if raw_setup_code.isdigit() and len(raw_setup_code) == 8:
+                    setup_code = raw_setup_code
+                else:
+                    print(f"⚠️  Invalid setup_code format: {raw_setup_code} (must be 8 digits)")
             
-            # Construct setup URI if we have a setup code
+            # Construct setup URI if we have a valid setup code
             if setup_code:
                 setup_uri = f"X-HM://{setup_code}"
             
@@ -232,11 +247,15 @@ class HomeKitReconnector:
                 else:
                     print("⚠️  No setup URI available")
             else:
-                print("❌ No setup code available. Device may already be paired.")
+                print("❌ No valid setup code available. Device may already be paired.")
                 print("\n💡 To get a new setup code:")
                 print("1. Reset pairing: python3 reconnect_homekit.py --reset-pairing")
                 print("2. Start the service: python3 main.py")
                 print("3. Look for the setup code in the console output")
+                print("\n🔧 Or delete hap.state and restart:")
+                print("1. Stop any running instances of main.py")
+                print("2. Delete hap.state file")
+                print("3. Restart: python3 main.py")
                 
         except Exception as e:
             print(f"❌ Error getting setup information: {e}")

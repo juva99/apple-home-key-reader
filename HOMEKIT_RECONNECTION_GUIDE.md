@@ -1,15 +1,57 @@
-# HomeKit Reconnection Guide
+# HomeKit Connection Guide
 
-This guide helps you reconnect your Apple Home Key Reader to HomeKit after the initial setup has been completed.
+This guide covers both reconnecting to HomeKit and adding new devices to your Apple Home Key Reader setup.
 
-## When to Use This Guide
+## Tools Available
 
-Use this reconnection script when:
+### 1. Reconnection Tools (for lost connections)
+- `reconnect_homekit.py` - Full featured reconnection tool with QR codes
+- `reconnect_homekit_standalone.py` - Lightweight tool with minimal dependencies
+
+### 2. Add New Device Tools (preserves existing pairings)
+- `add_new_device.py` - Full featured tool for adding new iOS devices
+- `add_new_device_simple.py` - Simple tool with minimal dependencies
+
+## When to Use Each Tool
+
+### Use Reconnection Tools When:
 - Your HomeKit connection was lost after a system restart
 - You can't see the lock in the Home app anymore
 - The Home app shows "No Response" for your lock
 - You want to add the lock to a different HomeKit home
 - You've reset your iOS device and need to re-pair
+
+### Use Add New Device Tools When:
+- You want to add a new iPhone or iPad to your existing setup
+- You got a new device and want to access the lock
+- Someone in your family needs access to the lock
+- You want to keep all existing pairings while adding new ones
+
+## Quick Start
+
+### Adding a New Device (Recommended)
+
+If you want to add a new iPhone/iPad while keeping existing devices working:
+
+```bash
+# Simple version (minimal dependencies)
+python3 add_new_device_simple.py
+
+# Full version (with QR codes)
+python3 add_new_device.py --show-qr
+```
+
+### Reconnecting After Connection Loss
+
+If your existing devices lost connection to HomeKit:
+
+```bash
+# Quick status check
+python3 reconnect_homekit.py --check-status
+
+# Show QR code for reconnection
+python3 reconnect_homekit.py --show-qr
+```
 
 ## Prerequisites
 
@@ -201,8 +243,105 @@ If you continue to have issues:
 3. Check the project's GitHub issues for similar problems
 4. Make sure all dependencies are correctly installed
 
+## Adding New Devices (Without Affecting Existing Ones)
+
+### Why Use the Add New Device Tools?
+
+Instead of resetting your entire HomeKit setup (which removes all existing device pairings), these tools let you add new iOS devices while preserving all existing access.
+
+### Tool Options
+
+#### Simple Tool (Minimal Dependencies)
+```bash
+python3 add_new_device_simple.py
+```
+
+This tool:
+- Works even without HAP-python installed
+- Shows basic setup information
+- Provides step-by-step instructions
+
+#### Full Tool (Complete Features)
+```bash
+# Show basic information
+python3 add_new_device.py
+
+# Include QR code for easy scanning
+python3 add_new_device.py --show-qr
+
+# Check system status first
+python3 add_new_device.py --status
+```
+
+This tool provides:
+- Current setup code validation
+- QR code generation (requires `qrcode` package)
+- Comprehensive status checking
+- Detailed troubleshooting information
+
+### Step-by-Step Process
+
+1. **Run the add new device tool:**
+   ```bash
+   python3 add_new_device.py --show-qr
+   ```
+
+2. **On your NEW iOS device:**
+   - Open the Home app
+   - Tap '+' (top right corner)
+   - Select 'Add Accessory'
+   - Tap 'More Options...'
+
+3. **Choose your method:**
+   - **Method A**: Look for 'NFC Lock' in nearby accessories
+   - **Method B**: Tap 'Enter Code Manually' and enter the displayed setup code
+   - **Method C**: Scan the QR code (if shown)
+
+4. **Complete setup:**
+   - Follow the Home app setup wizard
+   - Test access with your new device
+
+### Important Notes
+
+✅ **Safe Operation**: This process preserves all existing device pairings
+✅ **No Disruption**: Current users keep their access
+✅ **No File Deletion**: The hap.state file remains intact
+✅ **Multiple Devices**: You can add as many devices as needed
+
+### Troubleshooting New Device Addition
+
+#### Problem: No setup code displayed
+**Solution**: Ensure the main service is running (`python3 main.py`)
+
+#### Problem: "Invalid setup code" error
+**Check**: Setup codes must be exactly 8 numeric digits
+**Solution**: Restart the main service to generate a new code
+
+#### Problem: Accessory not found in Home app
+**Check**: Both devices on same WiFi network
+**Solution**: Make sure port is not blocked by firewall
+
+#### Problem: Setup fails during pairing
+**Check**: Console output of main service for errors
+**Solution**: Restart main service and try again
+
 ## Files Created/Modified
 
+This guide includes these tools:
+
+### Reconnection Tools
+- `reconnect_homekit.py` - Full featured reconnection tool with QR codes
+- `reconnect_homekit_standalone.py` - Lightweight tool with minimal dependencies
+- `reconnect_homekit.bat` / `reconnect_homekit.sh` - Interactive menu scripts
+
+### Add New Device Tools
+- `add_new_device.py` - Full featured tool for adding new iOS devices
+- `add_new_device_simple.py` - Simple tool with minimal dependencies
+
+### Dependencies
+- `requirements_reconnect.txt` - Additional packages for QR code support
+
+### Backup Files
 The reconnection script may create these files:
 - `hap.state.backup.TIMESTAMP` - Backup of previous HomeKit pairings
 - These backups can be restored by renaming back to `hap.state` if needed
