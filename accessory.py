@@ -35,6 +35,11 @@ class Lock(Accessory):
     ):
         super().__init__(*args, **kwargs)
         self._last_client_public_keys = None
+        
+        # Add pairing mode state
+        self._pairing_mode = False
+        self._pairing_mode_timer = None
+        self._pairing_mode_duration = 300  # 5 minutes default
 
         # Gate lock is always locked by default (1 = locked, 0 = unlocked)
         self._lock_target_state = 1
@@ -109,6 +114,132 @@ class Lock(Accessory):
 
         self._auto_lock_timer = threading.Timer(self.service.lock_timeout, auto_lock)
         self._auto_lock_timer.start()
+
+    def enable_pairing_mode(self, duration_seconds=300, show_pairing_info=True):
+        """
+        Enable pairing mode to allow new HomeKit controllers to pair.
+        This temporarily allows new pairings while preserving existing ones.
+        
+        Args:
+            duration_seconds: How long to keep pairing mode active
+            show_pairing_info: Whether to display QR code and setup information
+        """
+        if self._pairing_mode:
+            log.info("Pairing mode already active, extending duration")
+            self._cancel_pairing_mode_timer()
+        else:
+            log.info(f"Enabling pairing mode for {duration_seconds} seconds")
+            self._pairing_mode = True
+            
+            # Enable pairing in the HAP driver
+            if hasattr(self.driver, 'state'):
+                # Temporarily allow new pairings
+                original_paired = self.driver.state.paired
+                self.driver.state.paired = False
+                
+                def restore_paired_state():
+                    self.driver.state.paired = original_paired
+                    self._pairing_mode = False
+                    log.info("Pairing mode disabled - no longer accepting new pairings")
+                
+                # Store the restore function for manual cancellation
+                self._restore_paired_state = restore_paired_state
+            
+        # Set timer to automatically disable pairing mode
+        self._pairing_mode_duration = duration_seconds
+        self._start_pairing_mode_timer()
+        
+        # Display pairing information if requested
+        if show_pairing_info:
+            self.print_pairing_info()
+        
+        return True
+
+    def disable_pairing_mode(self):
+        """Manually disable pairing mode"""
+        if not self._pairing_mode:
+            log.info("Pairing mode is not active")
+            return False
+            
+        log.info("Manually disabling pairing mode")
+        self._cancel_pairing_mode_timer()
+        
+        if hasattr(self, '_restore_paired_state'):
+            self._restore_paired_state()
+            del self._restore_paired_state
+            
+        return True
+
+    def _start_pairing_mode_timer(self):
+        """Start the pairing mode timer"""
+        self._cancel_pairing_mode_timer()
+        
+        def auto_disable_pairing():
+            log.info(f"Auto-disabling pairing mode after {self._pairing_mode_duration} seconds")
+            if hasattr(self, '_restore_paired_state'):
+                self._restore_paired_state()
+                del self._restore_paired_state
+            self._pairing_mode_timer = None
+        
+        self._pairing_mode_timer = threading.Timer(self._pairing_mode_duration, auto_disable_pairing)
+        self._pairing_mode_timer.start()
+
+    def _cancel_pairing_mode_timer(self):
+        """Cancel any existing pairing mode timer"""
+        if self._pairing_mode_timer is not None:
+            self._pairing_mode_timer.cancel()
+            self._pairing_mode_timer = None
+
+    def is_pairing_mode_active(self):
+        """Check if pairing mode is currently active"""
+        return self._pairing_mode
+
+    def get_pairing_info(self):
+        """Get current pairing information including setup code and QR URI"""
+        if hasattr(self.driver, 'state') and hasattr(self.driver.state, 'setup_id'):
+            setup_code = self.driver.state.setup_id
+            # Generate the HomeKit QR code URI
+            qr_uri = f"X-HM://{setup_code}"
+            return {
+                'setup_code': setup_code,
+                'qr_uri': qr_uri,
+                'formatted_setup_code': f"{setup_code[:3]}-{setup_code[3:5]}-{setup_code[5:]}"
+            }
+        return None
+
+    def print_pairing_info(self):
+        """Print pairing information in a user-friendly format"""
+        info = self.get_pairing_info()
+        if info:
+            print("\n🔗 HomeKit Pairing Information")
+            print("=" * 50)
+            print(f"Setup Code: {info['formatted_setup_code']}")
+            print(f"QR Code URI: {info['qr_uri']}")
+            print("\n📱 To pair with HomeKit:")
+            print("1. Open the Home app on your iOS device")
+            print("2. Tap '+' to add an accessory")
+            print("3. Choose 'Add Accessory'")
+            print("4. Either:")
+            print(f"   - Enter setup code: {info['formatted_setup_code']}")
+            print("   - Scan this QR code URI in a QR generator and scan it")
+            print("   - Or use the camera to scan if QR code is displayed")
+            print("=" * 50)
+            
+            # Try to trigger the HAP driver's QR code display
+            if hasattr(self.driver, 'print_qrcode'):
+                print("\n📋 QR Code:")
+                try:
+                    self.driver.print_qrcode()
+                except Exception as e:
+                    log.warning(f"Could not display QR code: {e}")
+                    print(f"Use QR generator with URI: {info['qr_uri']}")
+            else:
+                print(f"\n📋 Generate QR code from URI: {info['qr_uri']}")
+            
+            return True
+        else:
+            print("⚠️ Pairing information not available (device may not be in pairing state)")
+            return False
 
     def on_endpoint_authenticated(self, endpoint):
         log.info(f"Unlocking due to endpoint authentication: {endpoint}")
@@ -242,6 +373,17 @@ class Lock(Accessory):
 
     def set_lock_control_point(self, value):
         log.info(f"set_lock_control_point: {value}")
+        
+        # Check if this is a pairing mode request (you can customize this logic)
+        # For example, you could use a specific value to trigger pairing mode
+        if value and len(value) > 0:
+            # Example: if first byte is 0xFF, enable pairing mode
+            if value[0] == 0xFF and len(value) > 1:
+                duration = int.from_bytes(value[1:3], 'big') if len(value) >= 3 else 300
+                self.enable_pairing_mode(duration)
+            # Example: if first byte is 0x00, disable pairing mode
+            elif value[0] == 0x00:
+                self.disable_pairing_mode()
 
     # All methods down here are forwarded to Service
     def get_hardware_finish(self):
@@ -281,8 +423,8 @@ class Lock(Accessory):
         """Cleanup GPIO when object is destroyed"""
         if self.gpio_pin is not None and GPIO_AVAILABLE:
             try:
-                GPIO.output(self.gpio_pin, GPIO.LOW)
-                GPIO.cleanup(self.gpio_pin)
+                # Note: gpiozero's LED handles cleanup automatically
+                # No manual GPIO.output or GPIO.cleanup needed
                 log.info(f"GPIO pin {self.gpio_pin} cleaned up")
             except Exception as e:
                 log.error(f"Failed to cleanup GPIO pin {self.gpio_pin}: {e}")

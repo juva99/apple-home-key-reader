@@ -72,11 +72,54 @@ class Service:
 
         self._run_flag = True
         self._runner = None
+        
+        # Add reference to accessory for pairing mode control
+        self._accessory = None
 
     def on_endpoint_authenticated(self, endpoint):
         """This method will be called when an endpoint is authenticated"""
         # Currently overwritten by accessory.py
         pass
+
+    def set_accessory_reference(self, accessory):
+        """Set reference to the accessory for pairing mode control"""
+        self._accessory = accessory
+
+    def enable_pairing_mode(self, duration_seconds=300, show_pairing_info=True):
+        """Enable pairing mode through the accessory"""
+        if self._accessory:
+            return self._accessory.enable_pairing_mode(duration_seconds, show_pairing_info)
+        else:
+            log.warning("No accessory reference set - cannot enable pairing mode")
+            return False
+
+    def disable_pairing_mode(self):
+        """Disable pairing mode through the accessory"""
+        if self._accessory:
+            return self._accessory.disable_pairing_mode()
+        else:
+            log.warning("No accessory reference set - cannot disable pairing mode")
+            return False
+
+    def is_pairing_mode_active(self):
+        """Check if pairing mode is active"""
+        if self._accessory:
+            return self._accessory.is_pairing_mode_active()
+        return False
+
+    def get_pairing_info(self):
+        """Get pairing information including setup code and QR URI"""
+        if self._accessory:
+            return self._accessory.get_pairing_info()
+        return None
+
+    def print_pairing_info(self):
+        """Print pairing information in a user-friendly format"""
+        if self._accessory:
+            return self._accessory.print_pairing_info()
+        else:
+            print("⚠️ No accessory reference set - cannot get pairing info")
+            return False
 
     def start(self):
         self._runner = create_runner(
@@ -183,15 +226,29 @@ class Service:
             time.sleep(2)
             log.info("Waiting for next device...")
 
-    def pair_new_device(self, timeout_seconds=60):
+    def pair_new_device(self, timeout_seconds=60, enable_pairing_mode=True, show_pairing_info=True):
         """
         Initiates pairing mode to connect a new HomeKit device.
         Returns True if a device was successfully paired, False if timeout occurred.
+        
+        Args:
+            timeout_seconds: How long to wait for a device to pair
+            enable_pairing_mode: Whether to enable pairing mode
+            show_pairing_info: Whether to display QR code and setup information
         """
         if self.repository.get_reader_private_key() in (None, b""):
             raise Exception(
                 "Device is not configured via HAP. Cannot pair new devices."
             )
+
+        # Enable pairing mode if requested
+        if enable_pairing_mode:
+            pairing_enabled = self.enable_pairing_mode(max(timeout_seconds, 300), show_pairing_info)
+            if not pairing_enabled:
+                log.warning("Could not enable pairing mode")
+        elif show_pairing_info:
+            # Show pairing info even if not enabling pairing mode
+            self.print_pairing_info()
 
         log.info(f"Starting pairing mode for {timeout_seconds} seconds...")
         log.info("Please present your HomeKit device to the NFC reader now.")

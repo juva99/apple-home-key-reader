@@ -42,6 +42,11 @@ def configure_hap_accessory(config: dict, homekey_service=None):
         lock_state_at_startup=int(config.get("default") != "unlocked"),
         gpio_pin=config.get("gpio", {}).get("pin", None),
     )
+    
+    # Set the accessory reference in the service for pairing mode control
+    if homekey_service:
+        homekey_service.set_accessory_reference(accessory)
+    
     driver.add_accessory(accessory=accessory)
     return driver, accessory
 
