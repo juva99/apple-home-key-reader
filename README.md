@@ -71,6 +71,54 @@ Other OS + Python version combos were not verified but may still work.
     python3 main.py
     ```
 
+# Pairing New Devices
+
+After initial setup, you can pair new HomeKit devices (phones, watches, etc.) without restarting the application. There are three ways to trigger pairing mode:
+
+## Method 1: Using the dedicated pairing script (Recommended)
+
+```bash
+python3 pair.py
+```
+
+This will start a 60-second pairing window. You can also specify a custom timeout:
+
+```bash
+python3 pair.py --timeout 120  # 2-minute timeout
+```
+
+## Method 2: Using main.py with --pair flag
+
+```bash
+python3 main.py --pair
+```
+
+Or with a custom timeout:
+
+```bash
+python3 main.py --pair --timeout 90
+```
+
+## Method 3: Programmatically (for integration with other applications)
+
+```python
+from service import Service
+from main import configure_nfc_device, configure_homekey_service, load_configuration
+
+config = load_configuration()
+nfc_device = configure_nfc_device(config["nfc"])
+homekey_service = configure_homekey_service(config["homekey"], nfc_device)
+
+# Start pairing mode for 60 seconds
+success = homekey_service.pair_new_device(timeout_seconds=60)
+if success:
+    print("Device paired successfully!")
+else:
+    print("Pairing timeout - no device was paired")
+```
+
+**Note:** During pairing mode, a QR code will be displayed that you can scan with the Home app to add the accessory. You can also present your HomeKit device to the NFC reader for NFC-based pairing. The pairing process will automatically detect and configure new devices that haven't been paired before.
+
 # Configuration
 
 Configuration is done via a JSON file `configuration.json`, with the following 5 blocks configurable:

@@ -1,3 +1,4 @@
+import argparse
 import json
 import logging
 import signal
@@ -68,7 +69,56 @@ def configure_homekey_service(config: dict, nfc_device, repository=None):
     return service
 
 
-def main():
+def pair_mode(timeout=60):
+    """Run in pairing mode to connect new HomeKit devices"""
+    config = load_configuration()
+    log = configure_logging(config["logging"])
+
+    log.info("Starting HomeKit pairing mode...")
+
+    nfc_device = configure_nfc_device(config["nfc"])
+    homekey_service = configure_homekey_service(config["homekey"], nfc_device)
+
+    # Create a temporary HAP accessory to display QR code and pairing info
+    hap_driver, _ = configure_hap_accessory(config["hap"], homekey_service)
+
+    print("\n🔗 HomeKit Pairing Mode Active")
+    print("=" * 50)
+    print("The HomeKit accessory is now discoverable!")
+    print("You can add it to your Home app using the QR code above.")
+    print(f"Pairing will timeout in {timeout} seconds.")
+    print("Present your device to the NFC reader to complete setup.")
+    print("=" * 50)
+
+    try:
+        # Start HAP driver to show QR code
+        hap_driver.start()
+
+        # Run NFC pairing
+        success = homekey_service.pair_new_device(timeout_seconds=timeout)
+
+        # Stop HAP driver
+        hap_driver.stop()
+
+        if success:
+            print("✅ Successfully paired new HomeKit device!")
+            return 0
+        else:
+            print("❌ Pairing timeout - no device was paired")
+            return 1
+    except Exception as e:
+        log.error(f"Pairing failed: {e}")
+        print(f"❌ Pairing failed: {e}")
+        # Ensure HAP driver is stopped on error
+        try:
+            hap_driver.stop()
+        except:
+            pass
+        return 1
+
+
+def main_service():
+    """Run the main HomeKit service (normal operation)"""
     config = load_configuration()
     log = configure_logging(config["logging"])
 
@@ -90,5 +140,27 @@ def main():
     hap_driver.start()
 
 
+def main():
+    parser = argparse.ArgumentParser(description="Apple HomeKey Reader")
+    parser.add_argument(
+        "--pair",
+        action="store_true",
+        help="Enter pairing mode to connect new HomeKit devices",
+    )
+    parser.add_argument(
+        "--timeout",
+        type=int,
+        default=60,
+        help="Pairing timeout in seconds (default: 60)",
+    )
+
+    args = parser.parse_args()
+
+    if args.pair:
+        return pair_mode(timeout=args.timeout)
+    else:
+        main_service()
+
+
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

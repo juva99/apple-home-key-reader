@@ -111,6 +111,10 @@ class Service:
             self.repository.upsert_issuer(issuer)
 
     def _read_homekey(self):
+        return self._perform_homekey_transaction()
+
+    def _perform_homekey_transaction(self):
+        """Performs a single HomeKey transaction (authentication or pairing)"""
         start = time.monotonic()
 
         remote_target = self.clf.sense(
@@ -124,11 +128,11 @@ class Service:
         if remote_target is None:
             # Throttle polling attempts to prevent overheating & RF performance degradation
             time.sleep(max(0, self.throttle_polling - time.monotonic() + start))
-            return
+            return None
 
         target = activate(self.clf, remote_target)
         if target is None:
-            return
+            return None
 
         if not isinstance(target, ISODEPTag):
             log.info(
@@ -137,7 +141,7 @@ class Service:
             while self.clf.sense(RemoteTarget("106A")) is not None:
                 log.info("Waiting for target to leave the field...")
                 time.sleep(0.5)
-            return
+            return None
 
         log.info(f"Got NFC tag {target}")
 
@@ -146,7 +150,7 @@ class Service:
             result_flow, new_issuers_state, endpoint = read_homekey(
                 tag,
                 issuers=self.repository.get_all_issuers(),
-                preferred_versions=[b"\x02\x00"],
+                preferred_versions=[b""],
                 flow=self.flow,
                 transaction_code=DigitalKeyTransactionType.UNLOCK,
                 reader_identifier=self.repository.get_reader_group_identifier()
@@ -165,16 +169,51 @@ class Service:
 
             if endpoint is not None:
                 self.on_endpoint_authenticated(endpoint)
+
+            return endpoint
         except ProtocolError as e:
             log.info(f'Could not authenticate device due to protocol error "{e}"')
+            return None
+        finally:
+            # Let device cool down, wait for ISODEP to drop to consider comms finished
+            while target.is_present:
+                log.info("Waiting for device to leave the field...")
+                time.sleep(0.5)
+            log.info("Device left the field. Continuing in 2 seconds...")
+            time.sleep(2)
+            log.info("Waiting for next device...")
 
-        # Let device cool down, wait for ISODEP to drop to consider comms finished
-        while target.is_present:
-            log.info("Waiting for device to leave the field...")
-            time.sleep(0.5)
-        log.info("Device left the field. Continuing in 2 seconds...")
-        time.sleep(2)
-        log.info("Waiting for next device...")
+    def pair_new_device(self, timeout_seconds=60):
+        """
+        Initiates pairing mode to connect a new HomeKit device.
+        Returns True if a device was successfully paired, False if timeout occurred.
+        """
+        if self.repository.get_reader_private_key() in (None, b""):
+            raise Exception(
+                "Device is not configured via HAP. Cannot pair new devices."
+            )
+
+        log.info(f"Starting pairing mode for {timeout_seconds} seconds...")
+        log.info("Please present your HomeKit device to the NFC reader now.")
+
+        # Ensure NFC device is connected
+        if self.clf.device is None:
+            self.clf.open(self.clf.path)
+            if self.clf.device is None:
+                raise Exception(
+                    f"Could not connect to NFC device {self.clf} at {self.clf.path}"
+                )
+
+        start_time = time.time()
+        while time.time() - start_time < timeout_seconds:
+            endpoint = self._perform_homekey_transaction()
+            if endpoint is not None:
+                log.info(f"Successfully paired new device: {endpoint}")
+                return True
+            time.sleep(0.1)  # Small delay between attempts
+
+        log.info("Pairing timeout reached. No device was paired.")
+        return False
 
     def run(self):
         if self.repository.get_reader_private_key() in (None, b""):
