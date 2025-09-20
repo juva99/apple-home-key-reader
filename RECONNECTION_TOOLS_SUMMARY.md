@@ -23,8 +23,9 @@ This document provides a quick overview of the HomeKit reconnection tools create
 - **Usage**: `./reconnect_homekit.sh` (make executable first)
 
 ### 5. `requirements_reconnect.txt`
-- **Purpose**: Additional dependencies for QR code generation
+- **Purpose**: Additional dependencies for QR code generation (ASCII output only)
 - **Install**: `pip install -r requirements_reconnect.txt`
+- **Note**: No PIL dependency required - uses terminal ASCII output
 
 ### 6. `HOMEKIT_RECONNECTION_GUIDE.md`
 - **Purpose**: Comprehensive guide with troubleshooting steps
@@ -42,9 +43,14 @@ python3 reconnect_homekit_standalone.py --check-status
 python3 reconnect_homekit_standalone.py --reset-pairing
 ```
 
-### Show Setup Instructions
+### Show Setup PIN and Instructions
 ```bash
 python3 reconnect_homekit_standalone.py --show-info
+```
+
+### Show QR Code (if available)
+```bash
+python3 reconnect_homekit.py --show-qr
 ```
 
 ## When to Use Each Tool
@@ -52,12 +58,14 @@ python3 reconnect_homekit_standalone.py --show-info
 - **Lost HomeKit connection**: Use `--check-status` first
 - **"No Response" in Home app**: Restart the main application (`python3 main.py`)
 - **Lock disappeared from Home app**: Use `--reset-pairing` then re-add in Home app
-- **Need QR code**: Install requirements_reconnect.txt and use full reconnect_homekit.py
+- **Need setup PIN**: Use `--show-info` for lightweight PIN display
+- **Need QR code**: Install requirements_reconnect.txt and use `--show-qr` for ASCII QR
 - **Want guided help**: Use the .bat (Windows) or .sh (Linux/macOS) interactive scripts
 
 ## Key Features
 
-✅ **Dependency-safe**: Standalone version works even if HAP-python isn't installed  
+✅ **PIN display**: Shows current HomeKit setup PIN without requiring all dependencies  
+✅ **ASCII QR codes**: Terminal-based QR codes without PIL dependency  
 ✅ **Status checking**: Verify configuration files and pairing status  
 ✅ **Safe reset**: Automatic backup before removing pairing data  
 ✅ **Cross-platform**: Works on Windows, Linux, and macOS  

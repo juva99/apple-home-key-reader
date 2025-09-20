@@ -196,28 +196,51 @@ class SimpleHomeKitReconnector:
         print("6. Follow the on-screen instructions")
     
     def show_info(self):
-        """Show setup information"""
+        """Show setup information and try to get current PIN if possible"""
         print("\n📋 HomeKit Setup Information:")
         print("=" * 35)
         
-        print("🔢 Setup Code: Check the console output when running 'python3 main.py'")
-        print("🌐 Network Port:", self.config['hap']['port'])
-        print("📁 State File:", self.config['hap']['persist'])
+        # Try to get current setup PIN if dependencies are available
+        current_pin = None
+        try:
+            if check_dependencies():
+                # Try to get the current setup code
+                from pyhap.accessory_driver import AccessoryDriver
+                temp_driver = AccessoryDriver(
+                    port=self.config["hap"]["port"], 
+                    persist_file=self.config["hap"]["persist"]
+                )
+                current_pin = temp_driver.state.setup_code
+        except Exception:
+            pass  # Ignore errors when trying to get PIN
         
-        print("\n📱 Setup Steps:")
-        print("1. Ensure the main application is running: python3 main.py")
-        print("2. Look for a message like 'Setup code: XXX-XX-XXX' in the output")
-        print("3. Open the Home app on your iOS device")
-        print("4. Tap '+' → 'Add Accessory' → 'More Options'")
-        print("5. Look for 'NFC Lock' in the nearby accessories")
-        print("6. If not found, tap 'Enter Code Manually' and enter the setup code")
-        print("7. Follow the setup wizard")
+        if current_pin:
+            print(f"� Current Setup PIN: {current_pin}")
+            print("\n📱 Quick Setup:")
+            print("1. Open the Home app on your iOS device")
+            print("2. Tap '+' → 'Add Accessory' → 'More Options'")
+            print("3. Look for 'NFC Lock' in nearby accessories")
+            print(f"4. If not found, tap 'Enter Code Manually' and enter: {current_pin}")
+            print("5. Follow the setup instructions")
+        else:
+            print("🔢 Setup PIN: Check console output when running 'python3 main.py'")
+            print("🌐 Network Port:", self.config['hap']['port'])
+            print("📁 State File:", self.config['hap']['persist'])
+            
+            print("\n📱 Setup Steps:")
+            print("1. Ensure the main application is running: python3 main.py")
+            print("2. Look for a message like 'Setup code: XXX-XX-XXX' in the output")
+            print("3. Open the Home app on your iOS device")
+            print("4. Tap '+' → 'Add Accessory' → 'More Options'")
+            print("5. Look for 'NFC Lock' in the nearby accessories")
+            print("6. If not found, tap 'Enter Code Manually' and enter the setup code")
+            print("7. Follow the setup wizard")
         
         print("\n🔧 Troubleshooting:")
         print("• Make sure your iOS device and this computer are on the same network")
         print("• Check that no firewall is blocking port", self.config['hap']['port'])
         print("• If the accessory doesn't appear, try restarting the application")
-        print("• For QR code generation, install: pip install qrcode[pil]")
+        print("• If PIN is not shown above, ensure dependencies are installed")
     
     def check_service(self):
         """Check if the service can start"""

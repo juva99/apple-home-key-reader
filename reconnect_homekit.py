@@ -25,16 +25,17 @@ import argparse
 import os
 import sys
 import time
-from io import StringIO
 
 # Import project modules
 from main import load_configuration, configure_logging, configure_hap_accessory, configure_nfc_device, configure_homekey_service
 from repository import Repository
 from pyhap.accessory_driver import AccessoryDriver
 
-# Optional QR code support
+# Optional QR code support (without PIL dependency)
 try:
     import qrcode
+    # Test if we can create a QR code without PIL
+    test_qr = qrcode.QRCode()
     QR_AVAILABLE = True
 except ImportError:
     QR_AVAILABLE = False
@@ -165,13 +166,8 @@ class HomeKitReconnector:
     
     def show_setup_qr(self):
         """Display the HomeKit setup QR code"""
-        print("\n🔲 HomeKit Setup QR Code:")
-        print("=" * 30)
-        
-        if not QR_AVAILABLE:
-            print("❌ QR code generation not available. Install qrcode package:")
-            print("   pip install qrcode[pil]")
-            return
+        print("\n🔲 HomeKit Setup Information:")
+        print("=" * 35)
         
         try:
             # Create a temporary driver to get the setup info
@@ -180,31 +176,63 @@ class HomeKitReconnector:
                 persist_file=self.config["hap"]["persist"]
             )
             
-            # Get setup URI
+            # Get setup URI and code
             setup_uri = temp_driver.state.setup_uri
             setup_code = temp_driver.state.setup_code
             
-            if setup_uri:
-                print(f"Setup Code: {setup_code}")
-                print(f"Setup URI: {setup_uri}")
-                print("\nQR Code:")
+            if setup_code:
+                print(f"📍 HomeKit Setup PIN: {setup_code}")
+                print("\n📱 How to use the Setup PIN:")
+                print("1. Open the Home app on your iOS device")
+                print("2. Tap '+' → 'Add Accessory'")
+                print("3. Tap 'More Options...' at the bottom")
+                print("4. Look for 'NFC Lock' in the nearby accessories")
+                print("5. If not found, tap 'Enter Code Manually'")
+                print(f"6. Enter the PIN: {setup_code}")
+                print("7. Follow the setup instructions")
                 
-                # Generate QR code
-                qr = qrcode.QRCode(version=1, box_size=10, border=5)
-                qr.add_data(setup_uri)
-                qr.make(fit=True)
-                
-                # Print QR code to terminal
-                f = StringIO()
-                qr.print_ascii(out=f)
-                f.seek(0)
-                print(f.read())
-                
+                if setup_uri:
+                    print(f"\n🔗 Setup URI: {setup_uri}")
+                    
+                    # Try to show QR code if available
+                    if QR_AVAILABLE:
+                        try:
+                            print("\n🔲 QR Code (ASCII):")
+                            # Create QR code without PIL dependency
+                            qr = qrcode.QRCode(
+                                version=1,
+                                error_correction=qrcode.constants.ERROR_CORRECT_L,
+                                box_size=1,
+                                border=2,
+                            )
+                            qr.add_data(setup_uri)
+                            qr.make(fit=True)
+                            
+                            # Print ASCII QR code to terminal
+                            qr.print_ascii(invert=True)
+                            
+                        except Exception as e:
+                            print(f"⚠️  QR code generation failed: {e}")
+                            print("💡 Use the Setup PIN above instead")
+                    else:
+                        print("\n💡 QR Code not available (qrcode package not installed)")
+                        print("   Install with: pip install qrcode")
+                        print("   Or use the Setup PIN above")
+                else:
+                    print("⚠️  No setup URI available")
             else:
-                print("❌ No setup URI available. Device may already be paired.")
+                print("❌ No setup code available. Device may already be paired.")
+                print("\n💡 To get a new setup code:")
+                print("1. Reset pairing: python3 reconnect_homekit.py --reset-pairing")
+                print("2. Start the service: python3 main.py")
+                print("3. Look for the setup code in the console output")
                 
         except Exception as e:
-            print(f"❌ Error generating QR code: {e}")
+            print(f"❌ Error getting setup information: {e}")
+            print("\n🔧 Troubleshooting:")
+            print("• Make sure the configuration file exists")
+            print("• Try resetting the pairing first")
+            print("• Ensure the service is not already running")
     
     def restart_service(self):
         """Restart the HomeKit service with current configuration"""

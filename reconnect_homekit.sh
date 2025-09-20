@@ -13,17 +13,18 @@ show_menu() {
     echo "Choose an option:"
     echo ""
     echo "1. Check Status"
-    echo "2. Show QR Code"
-    echo "3. Restart Service"
-    echo "4. Reset Pairing (WARNING: Removes all pairings)"
-    echo "5. Check Configuration"
-    echo "6. Exit"
+    echo "2. Show Setup PIN and Instructions"
+    echo "3. Show QR Code (if available)"
+    echo "4. Restart Service"
+    echo "5. Reset Pairing (WARNING: Removes all pairings)"
+    echo "6. Check Configuration"
+    echo "7. Exit"
     echo ""
 }
 
 while true; do
     show_menu
-    read -p "Enter your choice (1-6): " choice
+    read -p "Enter your choice (1-7): " choice
     
     case $choice in
         1)
@@ -35,12 +36,19 @@ while true; do
             ;;
         2)
             echo ""
-            echo "Displaying QR code..."
-            python3 reconnect_homekit.py --show-qr
+            echo "Showing setup information..."
+            python3 reconnect_homekit_standalone.py --show-info
             echo ""
             read -p "Press Enter to continue..."
             ;;
         3)
+            echo ""
+            echo "Displaying QR code (requires dependencies)..."
+            python3 reconnect_homekit.py --show-qr
+            echo ""
+            read -p "Press Enter to continue..."
+            ;;
+        4)
             echo ""
             echo "Restarting HomeKit service..."
             echo "Press Ctrl+C to stop the service when ready."
@@ -48,7 +56,7 @@ while true; do
             echo ""
             read -p "Press Enter to continue..."
             ;;
-        4)
+        5)
             echo ""
             echo "WARNING: This will remove ALL HomeKit pairings!"
             read -p "Are you sure? (y/N): " confirm
@@ -60,14 +68,14 @@ while true; do
             echo ""
             read -p "Press Enter to continue..."
             ;;
-        5)
+        6)
             echo ""
             echo "Checking configuration..."
             python3 reconnect_homekit.py --repair-config
             echo ""
             read -p "Press Enter to continue..."
             ;;
-        6)
+        7)
             echo ""
             echo "Goodbye!"
             exit 0

@@ -23,6 +23,8 @@ Use this reconnection script when:
    ```bash
    pip install -r requirements_reconnect.txt
    ```
+   
+   Note: The QR code package now generates ASCII QR codes in the terminal (no PIL required).
 
 ## Usage Options
 
@@ -49,11 +51,25 @@ If your device is not paired, you can display the HomeKit setup QR code:
 python3 reconnect_homekit.py --show-qr
 ```
 
+This will show:
+- The current HomeKit setup PIN (8-digit code)
+- Step-by-step instructions for manual setup
+- ASCII QR code displayed in the terminal (if qrcode package is installed)
+- Setup URI for advanced users
+
+For a lightweight option that shows the PIN without requiring all dependencies:
+
+```bash
+python3 reconnect_homekit_standalone.py --show-info
+```
+
 Then:
 1. Open the Home app on your iOS device
-2. Tap '+' and select "Add Accessory"
-3. Scan the displayed QR code
-4. Follow the setup instructions
+2. Tap '+' and select "Add Accessory"  
+3. Tap "More Options..." at the bottom
+4. Look for "NFC Lock" in nearby accessories
+5. If not found, tap "Enter Code Manually" and enter the 8-digit PIN
+6. Follow the setup instructions
 
 ### 3. Restart HomeKit Service
 
