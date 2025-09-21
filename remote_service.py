@@ -13,6 +13,13 @@ import logging
 from typing import Optional
 from supabase import create_client, Client, AsyncClient
 
+# Suppress verbose logging from Supabase client libraries
+logging.getLogger("websockets").setLevel(logging.WARNING)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("supabase").setLevel(logging.WARNING)
+logging.getLogger("postgrest").setLevel(logging.WARNING)
+logging.getLogger("realtime").setLevel(logging.WARNING)
+
 log = logging.getLogger(__name__)
 
 
