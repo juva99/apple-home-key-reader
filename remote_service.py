@@ -38,7 +38,7 @@ class RemoteUnlockService:
         self._thread: Optional[threading.Thread] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._running = False
-        self._shutdown_event = asyncio.Event()
+        self._shutdown_event = None  # Will be created in the async context
         
         # State management
         self.is_unlocking = False
@@ -65,8 +65,11 @@ class RemoteUnlockService:
         self._running = False
         
         # Signal shutdown to the async loop
-        if self._loop and not self._loop.is_closed():
-            self._loop.call_soon_threadsafe(self._shutdown_event.set)
+        if self._loop and not self._loop.is_closed() and self._shutdown_event:
+            try:
+                self._loop.call_soon_threadsafe(self._shutdown_event.set)
+            except Exception as e:
+                log.error(f"Error signaling shutdown: {e}")
         
         # Wait for thread to finish
         if self._thread and self._thread.is_alive():
@@ -89,6 +92,9 @@ class RemoteUnlockService:
     async def _async_main(self):
         """Main async function that handles the Supabase subscription"""
         try:
+            # Create shutdown event in the async context
+            self._shutdown_event = asyncio.Event()
+            
             log.info("Setting up Supabase real-time subscription...")
             
             # Setup real-time subscription
@@ -99,11 +105,16 @@ class RemoteUnlockService:
             
             log.info("Listening for remote lock commands...")
             
-            # Wait for shutdown signal
-            await self._shutdown_event.wait()
+            # Keep the subscription alive until shutdown
+            try:
+                await self._shutdown_event.wait()
+            except Exception as e:
+                log.error(f"Error waiting for shutdown event: {e}")
             
         except Exception as e:
             log.error(f"Error in RemoteUnlockService main loop: {e}")
+        finally:
+            log.info("RemoteUnlockService async main loop finished")
 
     async def _setup_realtime_subscription(self):
         """Setup real-time subscription to lock_commands table"""
@@ -129,63 +140,66 @@ class RemoteUnlockService:
     def _handle_lock_command_sync(self, payload):
         """Synchronous wrapper for async lock command handler"""
         try:
-            # Schedule the async handler in the current loop
-            if self._loop and not self._loop.is_closed():
-                asyncio.run_coroutine_threadsafe(
-                    self._handle_lock_command_async(payload), 
-                    self._loop
-                )
+            # Instead of using asyncio.run_coroutine_threadsafe, 
+            # we'll handle this synchronously since we're already in the right thread
+            # and use threading to handle the actual unlock
+            self._handle_lock_command_threaded(payload)
         except Exception as e:
             log.error(f"Error in lock command sync wrapper: {e}")
 
-    async def _handle_lock_command_async(self, payload):
-        """Handle incoming lock command from Supabase"""
-        try:
-            # Extract record from payload
-            data = payload.get("data", {})
-            record = data.get("record", {})
-            
-            lock_id = record.get("lock_id")
-            command = record.get("command")
-            created_by = record.get("created_by")
-            created_at = record.get("created_at")
-
-            log.info(f"📨 Received remote command: {command} for lock: {lock_id}")
-            
-            # Validate command
-            if lock_id != self.lock_id:
-                log.info(f"⏭️ Ignoring command for different lock: {lock_id}")
-                return
+    def _handle_lock_command_threaded(self, payload):
+        """Handle lock command in a separate thread to avoid blocking"""
+        def process_command():
+            try:
+                # Extract record from payload
+                data = payload.get("data", {})
+                record = data.get("record", {})
                 
-            if command != "unlock":
-                log.info(f"⏭️ Ignoring non-unlock command: {command}")
-                return
-            
-            if not self.lock_accessory:
-                log.error("❌ No lock accessory available")
-                return
+                lock_id = record.get("lock_id")
+                command = record.get("command")
+                created_by = record.get("created_by")
+                created_at = record.get("created_at")
 
-            # Process unlock command
-            log.info(f"🔓 Processing remote unlock command from user: {created_by or 'unknown'}")
-            
-            # Check if already unlocking to prevent race conditions
-            if self.is_unlocking:
-                log.info("🔄 Unlock already in progress, ignoring remote command")
-                return
-            
-            # Trigger remote unlock
-            success = await self._trigger_remote_unlock()
-            
-            if success:
-                log.info("✅ Remote unlock completed successfully")
-            else:
-                log.error("❌ Remote unlock failed")
+                log.info(f"📨 Received remote command: {command} for lock: {lock_id}")
+                
+                # Validate command
+                if lock_id != self.lock_id:
+                    log.info(f"⏭️ Ignoring command for different lock: {lock_id}")
+                    return
+                    
+                if command != "unlock":
+                    log.info(f"⏭️ Ignoring non-unlock command: {command}")
+                    return
+                
+                if not self.lock_accessory:
+                    log.error("❌ No lock accessory available")
+                    return
 
-        except Exception as e:
-            log.error(f"Error handling remote lock command: {e}")
+                # Process unlock command
+                log.info(f"🔓 Processing remote unlock command from user: {created_by or 'unknown'}")
+                
+                # Check if already unlocking to prevent race conditions
+                if self.is_unlocking:
+                    log.info("🔄 Unlock already in progress, ignoring remote command")
+                    return
+                
+                # Trigger remote unlock (synchronously)
+                success = self._trigger_remote_unlock_sync()
+                
+                if success:
+                    log.info("✅ Remote unlock completed successfully")
+                else:
+                    log.error("❌ Remote unlock failed")
 
-    async def _trigger_remote_unlock(self) -> bool:
-        """Trigger remote unlock using the lock accessory"""
+            except Exception as e:
+                log.error(f"Error handling remote lock command: {e}")
+        
+        # Run in a separate thread to avoid blocking the realtime subscription
+        thread = threading.Thread(target=process_command, daemon=True)
+        thread.start()
+
+    def _trigger_remote_unlock_sync(self) -> bool:
+        """Trigger remote unlock using the lock accessory (synchronous version)"""
         if self.is_unlocking:
             return False
         
@@ -193,7 +207,6 @@ class RemoteUnlockService:
             self.is_unlocking = True
             
             # Call the lock accessory's remote unlock method
-            # This will be implemented in the next step
             if hasattr(self.lock_accessory, 'remote_unlock'):
                 success = self.lock_accessory.remote_unlock()
                 return success
