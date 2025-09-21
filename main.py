@@ -9,6 +9,7 @@ from pyhap.accessory_driver import AccessoryDriver
 from accessory import Lock
 from repository import Repository
 from service import Service
+from remote_service import RemoteUnlockService
 from util.bfclf import BroadcastFrameContactlessFrontend
 
 # By default, this file is located in the same folder as the project
@@ -65,6 +66,31 @@ def configure_nfc_device(config: dict):
     return clf
 
 
+def configure_remote_unlock_service(config: dict, lock_accessory=None):
+    """Configure the remote unlock service if enabled"""
+    remote_config = config.get("remote_unlock", {})
+    
+    if not remote_config.get("enabled", False):
+        logging.getLogger().info("Remote unlock service is disabled")
+        return None
+    
+    try:
+        service = RemoteUnlockService(
+            supabase_url=remote_config["supabase_url"],
+            supabase_anon_key=remote_config["supabase_anon_key"],
+            lock_id=remote_config.get("lock_id", "front-door"),
+            lock_accessory=lock_accessory
+        )
+        logging.getLogger().info("Remote unlock service configured")
+        return service
+    except KeyError as e:
+        logging.getLogger().error(f"Missing remote unlock configuration: {e}")
+        return None
+    except Exception as e:
+        logging.getLogger().error(f"Failed to configure remote unlock service: {e}")
+        return None
+
+
 def configure_homekey_service(config: dict, nfc_device, repository=None):
     service = Service(
         nfc_device,
@@ -87,6 +113,9 @@ def main(pair_mode = False):
     homekey_service = configure_homekey_service(config["homekey"], nfc_device)
     hap_driver, lock = configure_hap_accessory(config["hap"], homekey_service)
 
+    # Configure remote unlock service after lock is created
+    remote_unlock_service = configure_remote_unlock_service(config, lock_accessory=lock)
+
     if pair_mode:
         lock.setup_message()
 
@@ -96,11 +125,17 @@ def main(pair_mode = False):
             lambda *_: (
                 log.info(f"SIGNAL {s}"),
                 homekey_service.stop(),
+                remote_unlock_service.stop() if remote_unlock_service else None,
                 hap_driver.stop(),
             ),
         )
 
     homekey_service.start()
+    
+    # Start remote unlock service if configured
+    if remote_unlock_service:
+        remote_unlock_service.start()
+    
     hap_driver.start()
 
 

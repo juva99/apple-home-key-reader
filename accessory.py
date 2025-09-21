@@ -124,6 +124,29 @@ class Lock(Accessory):
         # Start auto-lock timer
         self._start_auto_lock_timer()
 
+    def remote_unlock(self) -> bool:
+        """Trigger remote unlock via Supabase command"""
+        try:
+            log.info("Processing remote unlock command")
+            
+            # Update lock state
+            self._lock_target_state = 0
+            self._lock_current_state = 0
+            self.lock_target_state.set_value(self._lock_target_state, should_notify=True)
+            self.lock_current_state.set_value(self._lock_current_state, should_notify=True)
+            print("unlocked (remote)")
+
+            # Trigger GPIO unlock
+            self._trigger_gpio_unlock()
+
+            # Start auto-lock timer (as requested)
+            self._start_auto_lock_timer()
+            
+            return True
+        except Exception as e:
+            log.error(f"Failed to execute remote unlock: {e}")
+            return False
+
     def add_unpair_hook(self):
         unpair = self.driver.unpair
 
@@ -281,8 +304,7 @@ class Lock(Accessory):
         """Cleanup GPIO when object is destroyed"""
         if self.gpio_pin is not None and GPIO_AVAILABLE:
             try:
-                GPIO.output(self.gpio_pin, GPIO.LOW)
-                GPIO.cleanup(self.gpio_pin)
+                # GPIO cleanup is handled automatically by gpiozero
                 log.info(f"GPIO pin {self.gpio_pin} cleaned up")
             except Exception as e:
                 log.error(f"Failed to cleanup GPIO pin {self.gpio_pin}: {e}")
