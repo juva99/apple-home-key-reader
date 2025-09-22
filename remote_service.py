@@ -195,12 +195,12 @@ class RemoteUnlockService:
                 channel = self.supabase_realtime.channel(channel_name)
 
                 # Add error handler for the channel
-                def on_error(error):
+                def on_error(error, *args):
                     log.error(f"Channel error: {error}")
                     # Mark channel as None to trigger reconnection
                     self._channel = None
 
-                def on_close():
+                def on_close(*args):
                     log.warning("Channel closed, will attempt reconnection")
                     self._channel = None
 
