@@ -8,7 +8,7 @@ import asyncio
 import threading
 import logging
 from typing import Optional
-from supabase import create_client, Client
+from supabase import AsyncClient
 
 # Suppress verbose logging from Supabase client libraries
 logging.getLogger("websockets").setLevel(logging.WARNING)
@@ -35,13 +35,9 @@ class RemoteUnlockService:
         self.lock_id = lock_id
         self.lock_accessory = lock_accessory
         
-        # Create synchronous Supabase client
-        self.supabase: Client = create_client(supabase_url, supabase_anon_key)
-        
         # Simple state management
         self._thread: Optional[threading.Thread] = None
         self._running = False
-        self._channel = None
         
         log.info(f"RemoteUnlockService initialized for lock_id: {lock_id}")
 
@@ -52,7 +48,7 @@ class RemoteUnlockService:
             return
         
         self._running = True
-        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread = threading.Thread(target=self._run_async, daemon=True)
         self._thread.start()
         log.info("RemoteUnlockService started")
 
@@ -64,27 +60,40 @@ class RemoteUnlockService:
         log.info("Stopping RemoteUnlockService...")
         self._running = False
         
-        # Unsubscribe from channel
-        if self._channel:
-            try:
-                self._channel.unsubscribe()
-            except Exception as e:
-                log.error(f"Error unsubscribing: {e}")
-        
         # Wait for thread to finish
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=5)
         
         log.info("RemoteUnlockService stopped")
 
-    def _run(self):
-        """Main run loop - sets up subscription and waits"""
+    def _run_async(self):
+        """Run async code in thread"""
         try:
-            # Create channel for lock commands
-            self._channel = self.supabase.channel(f"lock-commands-{self.lock_id}")
+            # Create new event loop for this thread
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
             
-            # Subscribe to INSERT events on lock_commands table
-            self._channel.on_postgres_changes(
+            # Run the main async function
+            loop.run_until_complete(self._main())
+        except Exception as e:
+            log.error(f"Error in RemoteUnlockService: {e}")
+        finally:
+            try:
+                loop.close()
+            except:
+                pass
+
+    async def _main(self):
+        """Main async function"""
+        try:
+            # Create async Supabase client
+            supabase = AsyncClient(self.supabase_url, self.supabase_anon_key)
+            
+            # Create channel
+            channel = supabase.channel(f"lock-commands-{self.lock_id}")
+            
+            # Subscribe to INSERT events
+            channel.on_postgres_changes(
                 event="INSERT",
                 schema="public", 
                 table="lock_commands",
@@ -93,21 +102,18 @@ class RemoteUnlockService:
             )
             
             # Subscribe to the channel
-            self._channel.subscribe()
+            await channel.subscribe()
             log.info(f"✅ Subscribed to lock commands for {self.lock_id}")
             
-            # Keep the thread alive while running
+            # Keep running until stopped
             while self._running:
-                threading.Event().wait(1)  # Sleep for 1 second
+                await asyncio.sleep(1)
+            
+            # Unsubscribe when stopping
+            await channel.unsubscribe()
             
         except Exception as e:
-            log.error(f"Error in RemoteUnlockService: {e}")
-        finally:
-            if self._channel:
-                try:
-                    self._channel.unsubscribe()
-                except:
-                    pass
+            log.error(f"Error in main async loop: {e}")
 
     def _handle_lock_command(self, payload: dict):
         """Handle incoming lock command from Supabase"""
@@ -138,7 +144,7 @@ class RemoteUnlockService:
             # Process unlock command
             log.info(f"🔓 Processing unlock command from: {created_by or 'unknown'}")
             
-            # Trigger unlock in separate thread to avoid blocking
+            # Execute unlock in separate thread to avoid blocking the callback
             threading.Thread(
                 target=self._execute_unlock,
                 args=(created_by,),
