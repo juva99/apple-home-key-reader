@@ -47,6 +47,12 @@ class RemoteUnlockService:
         self._running = False
         self._shutdown_event = None  # Will be created in the async context
         
+        # Connection management
+        self._channel = None
+        self._reconnect_delay = 5  # seconds
+        self._max_reconnect_delay = 60  # seconds
+        self._reconnect_attempts = 0
+        
         # State management
         self.is_unlocking = False
         
@@ -97,62 +103,114 @@ class RemoteUnlockService:
                 self._loop.close()
 
     async def _async_main(self):
-        """Main async function that handles the Supabase subscription"""
+        """Main async function that handles the Supabase subscription with reconnection"""
         try:
             # Create shutdown event in the async context
             self._shutdown_event = asyncio.Event()
             
-            log.info("Setting up Supabase real-time subscription...")
+            log.info("Starting RemoteUnlockService with auto-reconnection...")
             
-            # Setup real-time subscription
-            channel = await self._setup_realtime_subscription()
-            if not channel:
-                log.error("Failed to setup Supabase subscription")
-                return
-            
-            log.info("Listening for remote lock commands...")
-            
-            # Keep the subscription alive until shutdown
-            try:
-                await self._shutdown_event.wait()
-            except Exception as e:
-                log.error(f"Error waiting for shutdown event: {e}")
+            # Keep trying to maintain connection until shutdown
+            while self._running:
+                try:
+                    # Setup real-time subscription
+                    await self._setup_realtime_subscription_with_retry()
+                    
+                    if self._channel:
+                        log.info("Listening for remote lock commands...")
+                        # Wait for shutdown or connection loss
+                        await self._monitor_connection()
+                    else:
+                        log.error("Failed to establish subscription after retries")
+                        break
+                        
+                except Exception as e:
+                    log.error(f"Error in subscription loop: {e}")
+                    if self._running:
+                        delay = min(self._reconnect_delay * (2 ** min(self._reconnect_attempts, 4)), self._max_reconnect_delay)
+                        log.info(f"Reconnecting in {delay} seconds...")
+                        await asyncio.sleep(delay)
+                        self._reconnect_attempts += 1
             
         except Exception as e:
             log.error(f"Error in RemoteUnlockService main loop: {e}")
         finally:
             log.info("RemoteUnlockService async main loop finished")
 
-    async def _setup_realtime_subscription(self):
-        """Setup real-time subscription to lock_commands table"""
+    async def _setup_realtime_subscription_with_retry(self):
+        """Setup real-time subscription with retry logic"""
+        max_retries = 5
+        
+        for attempt in range(max_retries):
+            try:
+                log.info(f"Setting up Supabase real-time subscription (attempt {attempt + 1}/{max_retries})...")
+                
+                # Create new client instance for fresh connection
+                self.supabase_realtime = AsyncClient(self.supabase_url, self.supabase_anon_key)
+                
+                channel = self.supabase_realtime.channel(f"remote-lock-commands-{attempt}")
+
+                channel.on_postgres_changes(
+                    event="INSERT",
+                    schema="public",
+                    table="lock_commands",
+                    filter=f"lock_id=eq.{self.lock_id}",
+                    callback=self._handle_lock_command_sync,
+                )
+
+                await channel.subscribe()
+                self._channel = channel
+                self._reconnect_attempts = 0  # Reset on successful connection
+                log.info(f"✅ Successfully subscribed to lock commands for {self.lock_id}")
+                return
+                
+            except Exception as e:
+                log.error(f"Subscription attempt {attempt + 1} failed: {e}")
+                if attempt < max_retries - 1:
+                    delay = 2 ** attempt  # Exponential backoff: 1, 2, 4, 8, 16 seconds
+                    await asyncio.sleep(delay)
+                else:
+                    log.error("All subscription attempts failed")
+                    self._channel = None
+
+    async def _monitor_connection(self):
+        """Monitor connection and handle disconnections"""
         try:
-            channel = self.supabase_realtime.channel("remote-lock-commands")
-
-            channel.on_postgres_changes(
-                event="INSERT",
-                schema="public",
-                table="lock_commands",
-                filter=f"lock_id=eq.{self.lock_id}",
-                callback=self._handle_lock_command_sync,
-            )
-
-            await channel.subscribe()
-            log.info(f"✅ Subscribed to lock commands for {self.lock_id}")
-            return channel
-            
+            # Wait for either shutdown or connection issues
+            while self._running and self._channel:
+                # Check if we should shutdown
+                try:
+                    await asyncio.wait_for(self._shutdown_event.wait(), timeout=30.0)
+                    # Shutdown requested
+                    break
+                except asyncio.TimeoutError:
+                    # Timeout reached, continue monitoring
+                    # You could add connection health check here if needed
+                    continue
+                    
         except Exception as e:
-            log.error(f"Failed to setup subscription: {e}")
-            return None
+            log.error(f"Connection monitoring error: {e}")
+            # Connection lost, will trigger reconnection in main loop
+
+    async def _setup_realtime_subscription(self):
+        """Legacy method - now handled by _setup_realtime_subscription_with_retry"""
+        # Keep this for compatibility but redirect to new method
+        await self._setup_realtime_subscription_with_retry()
+        return self._channel
 
     def _handle_lock_command_sync(self, payload):
         """Synchronous wrapper for async lock command handler"""
         try:
-            # Instead of using asyncio.run_coroutine_threadsafe, 
-            # we'll handle this synchronously since we're already in the right thread
-            # and use threading to handle the actual unlock
+            # Check if we're still running and have a valid connection
+            if not self._running or not self._channel:
+                log.warning("Received command but service is not active")
+                return
+                
+            # Handle the command in a separate thread to avoid blocking
             self._handle_lock_command_threaded(payload)
         except Exception as e:
             log.error(f"Error in lock command sync wrapper: {e}")
+            # Don't crash on individual command errors
 
     def _handle_lock_command_threaded(self, payload):
         """Handle lock command in a separate thread to avoid blocking"""
