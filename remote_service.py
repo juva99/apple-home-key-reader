@@ -118,23 +118,57 @@ class RemoteUnlockService:
                     
                     if self._channel:
                         log.info("Listening for remote lock commands...")
-                        # Wait for shutdown or connection loss
+                        # Monitor connection and wait for shutdown or connection loss
                         await self._monitor_connection()
+                        
+                        # If we reach here, either shutdown was requested or connection was lost
+                        if not self._running:
+                            log.info("Service shutdown requested")
+                            break
+                        else:
+                            # Connection was lost, clean up before retry
+                            log.warning("Connection lost, cleaning up before reconnection...")
+                            if self._channel:
+                                try:
+                                    await self._channel.unsubscribe()
+                                except:
+                                    pass
+                                self._channel = None
                     else:
                         log.error("Failed to establish subscription after retries")
-                        break
+                        
+                    # If we're still running but lost connection, wait before retry
+                    if self._running and not self._shutdown_event.is_set():
+                        delay = min(self._reconnect_delay * (2 ** min(self._reconnect_attempts, 4)), self._max_reconnect_delay)
+                        log.info(f"Reconnecting in {delay} seconds... (attempt {self._reconnect_attempts + 1})")
+                        try:
+                            await asyncio.wait_for(self._shutdown_event.wait(), timeout=delay)
+                            # Shutdown requested during wait
+                            break
+                        except asyncio.TimeoutError:
+                            # Timeout reached, continue with reconnection
+                            self._reconnect_attempts += 1
                         
                 except Exception as e:
                     log.error(f"Error in subscription loop: {e}")
                     if self._running:
                         delay = min(self._reconnect_delay * (2 ** min(self._reconnect_attempts, 4)), self._max_reconnect_delay)
-                        log.info(f"Reconnecting in {delay} seconds...")
-                        await asyncio.sleep(delay)
-                        self._reconnect_attempts += 1
+                        log.info(f"Reconnecting after error in {delay} seconds...")
+                        try:
+                            await asyncio.wait_for(self._shutdown_event.wait(), timeout=delay)
+                            break
+                        except asyncio.TimeoutError:
+                            self._reconnect_attempts += 1
             
         except Exception as e:
             log.error(f"Error in RemoteUnlockService main loop: {e}")
         finally:
+            # Clean up on exit
+            if self._channel:
+                try:
+                    await self._channel.unsubscribe()
+                except:
+                    pass
             log.info("RemoteUnlockService async main loop finished")
 
     async def _setup_realtime_subscription_with_retry(self):
@@ -145,10 +179,36 @@ class RemoteUnlockService:
             try:
                 log.info(f"Setting up Supabase real-time subscription (attempt {attempt + 1}/{max_retries})...")
                 
+                # Clean up any existing channel first
+                if self._channel:
+                    try:
+                        await self._channel.unsubscribe()
+                    except:
+                        pass
+                    self._channel = None
+                
                 # Create new client instance for fresh connection
                 self.supabase_realtime = AsyncClient(self.supabase_url, self.supabase_anon_key)
                 
-                channel = self.supabase_realtime.channel(f"remote-lock-commands-{attempt}")
+                # Use a unique channel name to avoid conflicts
+                channel_name = f"remote-lock-commands-{attempt}-{int(asyncio.get_event_loop().time())}"
+                channel = self.supabase_realtime.channel(channel_name)
+
+                # Add error handler for the channel
+                def on_error(error):
+                    log.error(f"Channel error: {error}")
+                    # Mark channel as None to trigger reconnection
+                    self._channel = None
+
+                def on_close():
+                    log.warning("Channel closed, will attempt reconnection")
+                    self._channel = None
+
+                # Set up event handlers if available
+                if hasattr(channel, 'on_error'):
+                    channel.on_error(on_error)
+                if hasattr(channel, 'on_close'):
+                    channel.on_close(on_close)
 
                 channel.on_postgres_changes(
                     event="INSERT",
@@ -158,16 +218,23 @@ class RemoteUnlockService:
                     callback=self._handle_lock_command_sync,
                 )
 
-                await channel.subscribe()
+                # Subscribe with timeout to detect stuck connections
+                try:
+                    await asyncio.wait_for(channel.subscribe(), timeout=30.0)
+                except asyncio.TimeoutError:
+                    log.error("Subscription timeout - connection may be stuck")
+                    raise ConnectionError("Subscription timeout")
+                
                 self._channel = channel
                 self._reconnect_attempts = 0  # Reset on successful connection
-                log.info(f"✅ Successfully subscribed to lock commands for {self.lock_id}")
+                log.info(f"✅ Successfully subscribed to lock commands for {self.lock_id} (channel: {channel_name})")
                 return
                 
             except Exception as e:
                 log.error(f"Subscription attempt {attempt + 1} failed: {e}")
                 if attempt < max_retries - 1:
-                    delay = 2 ** attempt  # Exponential backoff: 1, 2, 4, 8, 16 seconds
+                    delay = min(2 ** attempt, 16)  # Cap at 16 seconds
+                    log.info(f"Retrying in {delay} seconds...")
                     await asyncio.sleep(delay)
                 else:
                     log.error("All subscription attempts failed")
@@ -178,19 +245,35 @@ class RemoteUnlockService:
         try:
             # Wait for either shutdown or connection issues
             while self._running and self._channel:
-                # Check if we should shutdown
                 try:
-                    await asyncio.wait_for(self._shutdown_event.wait(), timeout=30.0)
+                    # Check if we should shutdown with shorter timeout for better responsiveness
+                    await asyncio.wait_for(self._shutdown_event.wait(), timeout=10.0)
                     # Shutdown requested
+                    log.info("Shutdown requested, stopping connection monitoring")
                     break
                 except asyncio.TimeoutError:
-                    # Timeout reached, continue monitoring
-                    # You could add connection health check here if needed
+                    # Timeout reached, check connection health
+                    if not self._running:
+                        break
+                    
+                    # Check if channel is still alive by examining connection state
+                    try:
+                        # Try to access channel state - this may raise if disconnected
+                        if hasattr(self._channel, '_socket') and self._channel._socket:
+                            if self._channel._socket.closed:
+                                log.warning("WebSocket connection detected as closed")
+                                raise ConnectionError("WebSocket connection closed")
+                    except Exception as e:
+                        log.warning(f"Connection health check failed: {e}")
+                        raise ConnectionError(f"Connection unhealthy: {e}")
+                    
                     continue
                     
-        except Exception as e:
-            log.error(f"Connection monitoring error: {e}")
-            # Connection lost, will trigger reconnection in main loop
+        except (ConnectionError, Exception) as e:
+            log.error(f"Connection lost or monitoring error: {e}")
+            # Mark channel as None to trigger reconnection
+            self._channel = None
+            # Don't raise - let the main loop handle reconnection
 
     async def _setup_realtime_subscription(self):
         """Legacy method - now handled by _setup_realtime_subscription_with_retry"""
