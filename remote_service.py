@@ -41,6 +41,7 @@ class RemoteUnlockService:
         self._running = False
         self._client = None
         self._channel = None
+        self._channel_name = f"lock-commands-{self.lock_id}"  # Remove timestamp
         
         log.info(f"RemoteUnlockService initialized for lock_id: {lock_id}")
 
@@ -81,9 +82,17 @@ class RemoteUnlockService:
                 # Cleanup
                 if self._channel:
                     try:
-                        loop.run_until_complete(self._channel.unsubscribe())
+                        loop.run_until_complete(self._cleanup_channel())
+                    except Exception as cleanup_error:
+                        log.debug(f"Cleanup error (expected): {cleanup_error}")
+                
+                if self._client:
+                    try:
+                        # Don't close the client, let it handle reconnection
+                        pass
                     except:
                         pass
+                
                 if loop:
                     try:
                         loop.close()
@@ -99,25 +108,32 @@ class RemoteUnlockService:
                     log.info("Reconnecting in 5 seconds...")
                     time.sleep(5)
 
+    async def _cleanup_channel(self):
+        """Properly cleanup the channel"""
+        if self._channel:
+            try:
+                await self._channel.unsubscribe()
+            except:
+                pass
+
     async def _subscribe_and_listen(self):
         """Subscribe to Supabase and listen for commands"""
-        # Create client
+        # Create client with better reconnection settings
         self._client = AsyncClient(
             self.supabase_url, 
             self.supabase_anon_key, 
             AsyncClientOptions(
                 realtime=RealtimeClientOptions(
-                    auto_reconnect=True,  # We handle reconnection ourselves
-                    max_retries=10,
+                    auto_reconnect=False,  # Handle reconnection ourselves
+                    max_retries=3,
                     hb_interval=30,
                 ),
-                persist_session=True
+                persist_session=False  # Don't persist session to avoid conflicts
             ),
         )
         
-        # Create channel
-        channel_name = f"lock-commands-{self.lock_id}-{int(time.time())}"
-        self._channel = self._client.channel(channel_name)
+        # Create channel with consistent name
+        self._channel = self._client.channel(self._channel_name)
         
         # Subscribe to postgres changes
         self._channel.on_postgres_changes(
@@ -130,11 +146,16 @@ class RemoteUnlockService:
         
         # Subscribe and wait
         await self._channel.subscribe()
-        log.info(f"✅ Subscribed to lock commands for {self.lock_id}")
+        log.info(f"✅ Subscribed to lock commands for {self.lock_id} on channel {self._channel_name}")
         
         # Keep alive - this will throw exception when connection fails
         while self._running:
             await asyncio.sleep(1)
+            
+            # Check if channel is still subscribed
+            if hasattr(self._channel, '_state') and self._channel._state == 'closed':
+                log.warning("Channel closed, triggering reconnection...")
+                raise ConnectionError("Channel was closed")
 
     def _handle_lock_command(self, payload: dict):
         """Handle incoming lock command"""
