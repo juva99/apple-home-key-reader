@@ -13,11 +13,11 @@ from supabase import AsyncClient, AsyncClientOptions
 from supabase.types import RealtimeClientOptions
 
 # Suppress verbose logging from Supabase client libraries
-# logging.getLogger("websockets").setLevel(logging.WARNING)
+logging.getLogger("websockets").setLevel(logging.WARNING)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("supabase").setLevel(logging.WARNING)
 logging.getLogger("postgrest").setLevel(logging.WARNING)
-# logging.getLogger("realtime").setLevel(logging.WARNING)
+logging.getLogger("realtime").setLevel(logging.WARNING)
 
 log = logging.getLogger(__name__)
 
@@ -89,15 +89,9 @@ class RemoteUnlockService:
                         loop.close()
                     except:
                         pass
-                
                 # Reset state
                 self._client = None
                 self._channel = None
-                
-                # Wait before reconnecting
-                if self._running:
-                    log.info("Reconnecting in 5 seconds...")
-                    time.sleep(5)
 
     async def _subscribe_and_listen(self):
         """Subscribe to Supabase and listen for commands"""
@@ -107,34 +101,34 @@ class RemoteUnlockService:
             self.supabase_anon_key, 
             AsyncClientOptions(
                 realtime=RealtimeClientOptions(
-                    auto_reconnect=True,  # We handle reconnection ourselves
-                    max_retries=10,
-                    hb_interval=30,
-                ),
-                persist_session=True
-            ),
+                    auto_reconnect=False,
+                )
+            )
         )
         
-        # Create channel
-        channel_name = f"lock-commands-{self.lock_id}-{int(time.time())}"
-        self._channel = self._client.channel(channel_name)
-        
-        # Subscribe to postgres changes
-        self._channel.on_postgres_changes(
-            event="INSERT",
-            schema="public", 
-            table="lock_commands",
-            filter=f"lock_id=eq.{self.lock_id}",
-            callback=self._handle_lock_command
-        )
-        
-        # Subscribe and wait
-        await self._channel.subscribe()
-        log.info(f"✅ Subscribed to lock commands for {self.lock_id}")
-        
-        # Keep alive - this will throw exception when connection fails
-        while self._running:
-            await asyncio.sleep(1)
+        while True:
+            try:
+                # Create channel
+                channel_name = f"lock-commands-{self.lock_id}-{int(time.time())}"
+                self._channel = self._client.channel(channel_name)
+                
+                # Subscribe to postgres changes
+                self._channel.on_postgres_changes(
+                    event="INSERT",
+                    schema="public", 
+                    table="lock_commands",
+                    filter=f"lock_id=eq.{self.lock_id}",
+                    callback=self._handle_lock_command
+                )
+                
+                # Subscribe and wait
+                await self._channel.subscribe()
+                
+                while True:
+                    await asyncio.sleep(1)
+
+            except Exception as e:
+                log.error(f"Subscription error: {e}")
 
     def _handle_lock_command(self, payload: dict):
         """Handle incoming lock command"""
