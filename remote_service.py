@@ -107,10 +107,12 @@ class RemoteUnlockService:
             self.supabase_anon_key, 
             AsyncClientOptions(
                 realtime=RealtimeClientOptions(
-                    auto_reconnect=False,  # We handle reconnection ourselves
-                    max_retries=1
-                )
-            )
+                    auto_reconnect=True,  # We handle reconnection ourselves
+                    max_retries=10,
+                    hb_interval=30,
+                ),
+                persist_session=True
+            ),
         )
         
         # Create channel
