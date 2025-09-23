@@ -8,14 +8,15 @@ import asyncio
 import threading
 import logging
 from typing import Optional
-from supabase import AsyncClient
+from supabase import AsyncClient, AsyncClientOptions
+from supabase.types import RealtimeClientOptions
 
 # Suppress verbose logging from Supabase client libraries
-logging.getLogger("websockets").setLevel(logging.WARNING)
+# logging.getLogger("websockets").setLevel(logging.WARNING)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("supabase").setLevel(logging.WARNING)
 logging.getLogger("postgrest").setLevel(logging.WARNING)
-logging.getLogger("realtime").setLevel(logging.WARNING)
+# logging.getLogger("realtime").setLevel(logging.WARNING)
 
 log = logging.getLogger(__name__)
 
@@ -87,7 +88,7 @@ class RemoteUnlockService:
         """Main async function"""
         try:
             # Create async Supabase client
-            supabase = AsyncClient(self.supabase_url, self.supabase_anon_key)
+            supabase = AsyncClient(self.supabase_url, self.supabase_anon_key, AsyncClientOptions(realtime=RealtimeClientOptions(auto_reconnect=True, max_retries=5)))
             
             # Create channel
             channel = supabase.channel(f"lock-commands-{self.lock_id}")
