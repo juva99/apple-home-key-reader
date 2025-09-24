@@ -7,10 +7,9 @@ Simple and reliable Supabase real-time subscription for remote lock commands.
 import asyncio
 import threading
 import logging
-import time
 from typing import Optional
 from supabase import AsyncClient, AsyncClientOptions
-from supabase.types import RealtimeClientOptions
+from supabase.types import RealtimeClientOptions, RealtimeSubscribeStates
 
 # Suppress verbose logging from Supabase client libraries
 logging.getLogger("websockets").setLevel(logging.WARNING)
@@ -41,7 +40,8 @@ class RemoteUnlockService:
         self._running = False
         self._client = None
         self._channel = None
-        self._channel_name = f"lock-commands-{self.lock_id}"  # Remove timestamp
+        self._loop = None
+        self._subscribe_task = None
         
         log.info(f"RemoteUnlockService initialized for lock_id: {lock_id}")
 
@@ -63,78 +63,82 @@ class RemoteUnlockService:
         log.info("Stopping RemoteUnlockService...")
         self._running = False
         
+        # Cancel the subscribe task if it exists
+        if self._subscribe_task and not self._subscribe_task.done():
+            self._subscribe_task.cancel()
+        
         if self._thread and self._thread.is_alive():
-            self._thread.join(timeout=3)
+            self._thread.join(timeout=5)
         
         log.info("RemoteUnlockService stopped")
 
     def _run(self):
-        """Main service loop - handles reconnection automatically"""
-        while self._running:
-            try:
-                # Run async subscription
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                loop.run_until_complete(self._subscribe_and_listen())
-            except Exception as e:
-                log.error(f"Service error: {e}")
-            finally:
-                # Cleanup
-                if self._channel:
-                    try:
-                        loop.run_until_complete(self._cleanup_channel())
-                    except Exception as cleanup_error:
-                        log.debug(f"Cleanup error (expected): {cleanup_error}")
-                
-                if self._client:
-                    try:
-                        # Don't close the client, let it handle reconnection
-                        pass
-                    except:
-                        pass
-                
-                if loop:
-                    try:
-                        loop.close()
-                    except:
-                        pass
-                # Reset state
-                self._client = None
-                self._channel = None
-                
-                # Wait before reconnecting
-                if self._running:
-                    log.info("Reconnecting in 5 seconds...")
-                    time.sleep(5)
+        """Main service loop - uses built-in Supabase reconnection"""
+        try:
+            # Create a single event loop for the entire service
+            self._loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(self._loop)
+            
+            # Run the subscription
+            self._loop.run_until_complete(self._subscribe_and_listen())
+            
+        except Exception as e:
+            log.error(f"Service error: {e}")
+        finally:
+            # Cleanup
+            if self._channel:
+                try:
+                    self._loop.run_until_complete(self._cleanup())
+                except Exception as cleanup_error:
+                    log.debug(f"Cleanup error: {cleanup_error}")
+            
+            if self._loop:
+                try:
+                    self._loop.close()
+                except:
+                    pass
 
-    async def _cleanup_channel(self):
-        """Properly cleanup the channel"""
-        if self._channel:
-            try:
-                await self._channel.unsubscribe()
-            except:
-                pass
+    async def _cleanup(self):
+        """Properly cleanup resources"""
+        try:
+            if self._channel:
+                # Only unsubscribe if we're actually stopping the service
+                if not self._running:
+                    await self._channel.unsubscribe()
+                    log.info("Channel unsubscribed")
+            
+            if self._client:
+                # Close the client connection
+                await self._client.realtime.close()
+                log.info("Client connection closed")
+                
+        except Exception as e:
+            log.debug(f"Cleanup exception: {e}")
+        finally:
+            self._client = None
+            self._channel = None
 
     async def _subscribe_and_listen(self):
-        """Subscribe to Supabase and listen for commands"""
-        # Create client with better reconnection settings
+        """Subscribe to Supabase and listen for commands with built-in reconnection"""
+        # Create client with automatic reconnection enabled
         self._client = AsyncClient(
             self.supabase_url, 
             self.supabase_anon_key, 
             AsyncClientOptions(
                 realtime=RealtimeClientOptions(
-                    auto_reconnect=False,  # Handle reconnection ourselves
-                    max_retries=3,
-                    hb_interval=30,
+                    auto_reconnect=True,  # Let Supabase handle reconnection
+                    max_retries=10,       # More retries for better reliability
+                    hb_interval=30,       # Heartbeat interval
                 ),
-                persist_session=False  # Don't persist session to avoid conflicts
+                persist_session=False
             ),
         )
         
-        # Create channel with consistent name
-        self._channel = self._client.channel(self._channel_name)
+        # Create channel - use a simple, consistent name
+        channel_name = f"lock-{self.lock_id}"
+        self._channel = self._client.channel(channel_name)
         
-        # Subscribe to postgres changes
+        # Set up postgres changes listener
         self._channel.on_postgres_changes(
             event="INSERT",
             schema="public", 
@@ -143,18 +147,31 @@ class RemoteUnlockService:
             callback=self._handle_lock_command
         )
         
-        # Subscribe and wait
-        await self._channel.subscribe()
-        log.info(f"✅ Subscribed to lock commands for {self.lock_id} on channel {self._channel_name}")
+        # Subscribe with callback to monitor connection state
+        await self._channel.subscribe(callback=self._on_subscribe_callback)
         
-        # Keep alive - this will throw exception when connection fails
-        while self._running:
-            await asyncio.sleep(1)
-            
-            # Check if channel is still subscribed
-            if hasattr(self._channel, '_state') and self._channel._state == 'closed':
-                log.warning("Channel closed, triggering reconnection...")
-                raise ConnectionError("Channel was closed")
+        log.info(f"✅ Subscribed to lock commands for {self.lock_id} on channel {channel_name}")
+        
+        # Keep the service alive - the client will handle reconnections automatically
+        try:
+            while self._running:
+                await asyncio.sleep(1)
+        except asyncio.CancelledError:
+            log.info("Subscription cancelled")
+        except Exception as e:
+            log.error(f"Unexpected error in subscription: {e}")
+            raise
+
+    def _on_subscribe_callback(self, status: RealtimeSubscribeStates, err: Optional[Exception]):
+        """Handle subscription status changes"""
+        if status == RealtimeSubscribeStates.SUBSCRIBED:
+            log.info("🟢 Successfully subscribed to realtime channel")
+        elif status == RealtimeSubscribeStates.CHANNEL_ERROR:
+            log.error(f"🔴 Channel error: {err}")
+        elif status == RealtimeSubscribeStates.TIMED_OUT:
+            log.warning("🟡 Subscription timed out")
+        elif status == RealtimeSubscribeStates.CLOSED:
+            log.info("🔵 Channel closed")
 
     def _handle_lock_command(self, payload: dict):
         """Handle incoming lock command"""
