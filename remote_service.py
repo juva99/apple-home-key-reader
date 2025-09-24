@@ -9,7 +9,8 @@ import threading
 import logging
 from typing import Optional
 from supabase import AsyncClient, AsyncClientOptions
-from supabase.types import RealtimeClientOptions, RealtimeSubscribeStates
+from supabase.types import RealtimeClientOptions
+from realtime import RealtimeSubscribeStates
 
 # Suppress verbose logging from Supabase client libraries
 logging.getLogger("websockets").setLevel(logging.WARNING)
