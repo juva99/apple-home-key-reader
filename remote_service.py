@@ -9,7 +9,7 @@ import threading
 import logging
 from typing import Optional
 from supabase import AsyncClient, AsyncClientOptions
-from supabase.types import RealtimeClientOptions, RealtimeSubscribeStates
+from supabase.types import RealtimeClientOptions
 
 # Suppress verbose logging from Supabase client libraries
 logging.getLogger("websockets").setLevel(logging.WARNING)
@@ -162,16 +162,9 @@ class RemoteUnlockService:
             log.error(f"Unexpected error in subscription: {e}")
             raise
 
-    def _on_subscribe_callback(self, status: RealtimeSubscribeStates, err: Optional[Exception]):
+    def _on_subscribe_callback(self, status, err: Optional[Exception]):
         """Handle subscription status changes"""
-        if status == RealtimeSubscribeStates.SUBSCRIBED:
-            log.info("🟢 Successfully subscribed to realtime channel")
-        elif status == RealtimeSubscribeStates.CHANNEL_ERROR:
-            log.error(f"🔴 Channel error: {err}")
-        elif status == RealtimeSubscribeStates.TIMED_OUT:
-            log.warning("🟡 Subscription timed out")
-        elif status == RealtimeSubscribeStates.CLOSED:
-            log.info("🔵 Channel closed")
+        log.info(f"Subscription status changed: {status}")
 
     def _handle_lock_command(self, payload: dict):
         """Handle incoming lock command"""
