@@ -9,7 +9,7 @@ import threading
 import logging
 from typing import Optional
 from supabase import AsyncClient, AsyncClientOptions
-from supabase.types import RealtimeClientOptions
+from supabase.types import RealtimeClientOptions, RealtimeSubscribeStates
 
 # Suppress verbose logging from Supabase client libraries
 logging.getLogger("websockets").setLevel(logging.WARNING)
@@ -73,30 +73,42 @@ class RemoteUnlockService:
         log.info("RemoteUnlockService stopped")
 
     def _run(self):
-        """Main service loop - uses built-in Supabase reconnection"""
-        try:
-            # Create a single event loop for the entire service
-            self._loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(self._loop)
-            
-            # Run the subscription
-            self._loop.run_until_complete(self._subscribe_and_listen())
-            
-        except Exception as e:
-            log.error(f"Service error: {e}")
-        finally:
-            # Cleanup
-            if self._channel:
-                try:
-                    self._loop.run_until_complete(self._cleanup())
-                except Exception as cleanup_error:
-                    log.debug(f"Cleanup error: {cleanup_error}")
-            
-            if self._loop:
-                try:
-                    self._loop.close()
-                except:
-                    pass
+        """Main service loop - handles reconnection with retries"""
+        while self._running:
+            try:
+                # Create a new event loop for each attempt
+                self._loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(self._loop)
+                
+                # Run the subscription
+                self._loop.run_until_complete(self._subscribe_and_listen())
+                
+            except Exception as e:
+                log.error(f"Service error: {e}")
+            finally:
+                # Cleanup
+                if self._channel and self._loop:
+                    try:
+                        self._loop.run_until_complete(self._cleanup())
+                    except Exception as cleanup_error:
+                        log.debug(f"Cleanup error: {cleanup_error}")
+                
+                if self._loop:
+                    try:
+                        self._loop.close()
+                    except:
+                        pass
+                
+                # Reset state
+                self._client = None
+                self._channel = None
+                self._loop = None
+                
+                # Wait before retry if still running
+                if self._running:
+                    log.info("Retrying connection in 5 seconds...")
+                    import time
+                    time.sleep(5)
 
     async def _cleanup(self):
         """Properly cleanup resources"""
@@ -120,15 +132,15 @@ class RemoteUnlockService:
 
     async def _subscribe_and_listen(self):
         """Subscribe to Supabase and listen for commands with built-in reconnection"""
-        # Create client with automatic reconnection enabled
+        # Create client with optimized reconnection settings
         self._client = AsyncClient(
             self.supabase_url, 
             self.supabase_anon_key, 
             AsyncClientOptions(
                 realtime=RealtimeClientOptions(
-                    auto_reconnect=True,  # Let Supabase handle reconnection
-                    max_retries=10,       # More retries for better reliability
-                    hb_interval=30,       # Heartbeat interval
+                    auto_reconnect=True,  # Let Supabase handle websocket reconnection
+                    max_retries=5,        # Reasonable retry count
+                    hb_interval=25,       # Standard heartbeat interval
                 ),
                 persist_session=False
             ),
@@ -148,23 +160,60 @@ class RemoteUnlockService:
         )
         
         # Subscribe with callback to monitor connection state
-        await self._channel.subscribe(callback=self._on_subscribe_callback)
+        subscription_success = False
+        max_attempts = 3
+        attempt = 0
+        
+        while attempt < max_attempts and self._running:
+            try:
+                await self._channel.subscribe(callback=self._on_subscribe_callback)
+                subscription_success = True
+                break
+            except Exception as e:
+                attempt += 1
+                log.warning(f"Subscription attempt {attempt} failed: {e}")
+                if attempt < max_attempts:
+                    await asyncio.sleep(2)
+                else:
+                    raise
+        
+        if not subscription_success:
+            raise Exception("Failed to subscribe after all attempts")
         
         log.info(f"✅ Subscribed to lock commands for {self.lock_id} on channel {channel_name}")
         
-        # Keep the service alive - the client will handle reconnections automatically
+        # Keep the service alive - monitor for connection issues
         try:
             while self._running:
                 await asyncio.sleep(1)
+                
+                # Check if we need to handle subscription failures
+                if hasattr(self._channel, 'state') and self._channel.state in ['closed', 'errored']:
+                    log.warning(f"Channel state is {self._channel.state}, triggering reconnection...")
+                    raise ConnectionError(f"Channel in {self._channel.state} state")
+                    
         except asyncio.CancelledError:
             log.info("Subscription cancelled")
         except Exception as e:
-            log.error(f"Unexpected error in subscription: {e}")
+            log.error(f"Subscription error: {e}")
             raise
 
-    def _on_subscribe_callback(self, status, err: Optional[Exception]):
+    def _on_subscribe_callback(self, status: RealtimeSubscribeStates, err: Optional[Exception]):
         """Handle subscription status changes"""
-        log.info(f"Subscription status changed: {status}")
+        if status == RealtimeSubscribeStates.SUBSCRIBED:
+            log.info("🟢 Successfully subscribed to realtime channel")
+        elif status == RealtimeSubscribeStates.CHANNEL_ERROR:
+            log.error(f"🔴 Channel error: {err}")
+            # Channel error should trigger reconnection
+            raise Exception(f"Channel error: {err}")
+        elif status == RealtimeSubscribeStates.TIMED_OUT:
+            log.warning("🟡 Subscription timed out - triggering reconnection")
+            # Timeout should trigger reconnection
+            raise Exception("Subscription timed out")
+        elif status == RealtimeSubscribeStates.CLOSED:
+            log.info("🔵 Channel closed")
+        else:
+            log.info(f"Subscription status: {status}")
 
     def _handle_lock_command(self, payload: dict):
         """Handle incoming lock command"""
