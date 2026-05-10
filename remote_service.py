@@ -76,6 +76,7 @@ class RemoteUnlockService:
     def _run(self):
         """Main service loop - handles reconnection with retries"""
         while self._running:
+            self._loop = None
             try:
                 # Create a new event loop for each attempt
                 self._loop = asyncio.new_event_loop()
@@ -85,20 +86,33 @@ class RemoteUnlockService:
                 self._loop.run_until_complete(self._subscribe_and_listen())
 
             except Exception as e:
-                log.error(f"Service error: {e}")
+                log.error(f"Service error: {e}", exc_info=True)
             finally:
-                # Cleanup
-                if self._channel and self._loop:
+                # Cleanup - always cleanup regardless of _running state
+                if self._loop and not self._loop.is_closed():
                     try:
-                        self._loop.run_until_complete(self._cleanup())
+                        # Run cleanup if we have resources to clean
+                        if self._channel or self._client:
+                            self._loop.run_until_complete(self._cleanup())
                     except Exception as cleanup_error:
-                        log.debug(f"Cleanup error: {cleanup_error}")
+                        log.error(f"Cleanup error: {cleanup_error}", exc_info=True)
 
-                if self._loop:
+                    # Close the event loop
                     try:
+                        # Cancel all pending tasks
+                        pending = asyncio.all_tasks(self._loop)
+                        for task in pending:
+                            task.cancel()
+
+                        # Run loop one more time to complete cancellations
+                        if pending:
+                            self._loop.run_until_complete(
+                                asyncio.gather(*pending, return_exceptions=True)
+                            )
+
                         self._loop.close()
-                    except:
-                        pass
+                    except Exception as e:
+                        log.error(f"Error closing event loop: {e}", exc_info=True)
 
                 # Reset state
                 self._client = None
@@ -115,19 +129,24 @@ class RemoteUnlockService:
     async def _cleanup(self):
         """Properly cleanup resources"""
         try:
+            # Always try to unsubscribe to prevent resource leaks
             if self._channel:
-                # Only unsubscribe if we're actually stopping the service
-                if not self._running:
+                try:
                     await self._channel.unsubscribe()
                     log.info("Channel unsubscribed")
+                except Exception as e:
+                    log.warning(f"Error unsubscribing channel: {e}")
 
             if self._client:
-                # Close the client connection
-                await self._client.realtime.close()
-                log.info("Client connection closed")
+                try:
+                    # Close the client connection
+                    await self._client.realtime.close()
+                    log.info("Client connection closed")
+                except Exception as e:
+                    log.warning(f"Error closing client: {e}")
 
         except Exception as e:
-            log.debug(f"Cleanup exception: {e}")
+            log.error(f"Cleanup exception: {e}", exc_info=True)
         finally:
             self._client = None
             self._channel = None
@@ -216,12 +235,12 @@ class RemoteUnlockService:
             log.info("🟢 Successfully subscribed to realtime channel")
         elif status == RealtimeSubscribeStates.CHANNEL_ERROR:
             log.error(f"🔴 Channel error: {err}")
-            # Channel error should trigger reconnection
-            raise Exception(f"Channel error: {err}")
+            # Don't raise here - let the monitoring loop detect the issue
         elif status == RealtimeSubscribeStates.TIMED_OUT:
-            log.warning("🟡 Subscription timed out - triggering reconnection")
-            # Timeout should trigger reconnection
-            raise Exception("Subscription timed out")
+            log.warning(
+                "🟡 Subscription timed out - will be detected by monitoring loop"
+            )
+            # Don't raise here - let the monitoring loop detect the issue
         elif status == RealtimeSubscribeStates.CLOSED:
             log.info("🔵 Channel closed")
         else:

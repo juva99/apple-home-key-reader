@@ -27,7 +27,7 @@
     },
 
     "remote_unlock": {
-        "enabled": true,
+        "enabled": false,
         "supabase_url": "https://cjcknpdgvcysndpekjnz.supabase.co",
         "supabase_anon_key": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNqY2tucGRndmN5c25kcGVram56Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTgwMTk1MDgsImV4cCI6MjA3MzU5NTUwOH0.j55v0GxD8utdR1M0GU8i2cw82PmRGnkQfruAaNMXnOw",
         "lock_id": "front-door"
