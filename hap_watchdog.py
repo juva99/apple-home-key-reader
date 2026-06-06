@@ -81,6 +81,10 @@ class HapWatchdog:
             exception_delay=self.check_interval,
             start=True,
         )
+        log.info(
+            f"HAP watchdog started (interval={self.check_interval}s, "
+            f"grace={self.grace_checks} checks)"
+        )
 
     def stop(self):
         self._run_flag = False
@@ -111,6 +115,7 @@ class HapWatchdog:
         or was connected), meaning the network fallback should be skipped.
         """
         count = self._active_connections()
+        log.debug(f"HAP watchdog check: {count} active HAP connection(s)")
 
         if count > 0:
             if not self._had_connection:
