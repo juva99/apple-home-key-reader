@@ -10,6 +10,7 @@ from accessory import Lock
 from repository import Repository
 from service import Service
 from remote_service import RemoteUnlockService
+from hap_watchdog import HapWatchdog
 from util.bfclf import BroadcastFrameContactlessFrontend
 
 # By default, this file is located in the same folder as the project
@@ -116,6 +117,14 @@ def main(pair_mode = False):
     # Configure remote unlock service after lock is created
     remote_unlock_service = configure_remote_unlock_service(config, lock_accessory=lock)
 
+    # Re-publish the HomeKit mDNS advertisement if the HomeKit (HAP) connection
+    # drops or the network changes, so the accessory stays discoverable without
+    # restarting the service.
+    hap_watchdog = HapWatchdog(
+        hap_driver,
+        check_interval=float(config["hap"].get("network_watchdog_interval", 15)),
+    )
+
     if pair_mode:
         lock.setup_message()
 
@@ -126,6 +135,7 @@ def main(pair_mode = False):
                 log.info(f"SIGNAL {s}"),
                 homekey_service.stop(),
                 remote_unlock_service.stop() if remote_unlock_service else None,
+                hap_watchdog.stop(),
                 hap_driver.stop(),
             ),
         )
@@ -136,6 +146,7 @@ def main(pair_mode = False):
     if remote_unlock_service:
         remote_unlock_service.start()
     
+    hap_watchdog.start()
     hap_driver.start()
 
 
