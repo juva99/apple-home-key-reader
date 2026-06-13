@@ -15,7 +15,13 @@
         "gpio": {
             "pin": 18,
             "duration": 10
-        }
+        },
+        "network_startup_check_interval": 2,
+        "network_startup_timeout": 0,
+        "network_address_stable_checks": 2,
+        "network_watchdog_interval": 15,
+        "network_refresh_cooldown": 60,
+        "network_refresh_max_failures": 3
     },
 
     "homekey": {

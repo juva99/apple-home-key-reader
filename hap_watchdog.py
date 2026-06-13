@@ -1,6 +1,9 @@
 import asyncio
 import logging
+import os
 import socket
+import threading
+import time
 from operator import attrgetter
 
 from zeroconf.asyncio import AsyncZeroconf
@@ -10,6 +13,9 @@ from pyhap.accessory_driver import AccessoryMDNSServiceInfo
 from util.threads import create_runner
 
 log = logging.getLogger()
+
+
+WATCHDOG_EXIT_CODE = 75
 
 
 def detect_local_address():
@@ -28,6 +34,52 @@ def detect_local_address():
         return None
     finally:
         sock.close()
+
+
+def wait_for_stable_local_address(
+    *, check_interval: float = 2.0, stable_checks: int = 2, timeout: float = 0
+):
+    """Wait until the primary local IPv4 address is present and stable.
+
+    A timeout of ``0`` means wait indefinitely. This is useful during Raspberry
+    Pi boot, where systemd may start the process before DHCP and the default
+    route are ready.
+    """
+    check_interval = max(0.5, float(check_interval))
+    stable_checks = max(1, int(stable_checks))
+    timeout = float(timeout or 0)
+    deadline = time.monotonic() + timeout if timeout > 0 else None
+
+    candidate = None
+    streak = 0
+    logged_wait = False
+
+    while True:
+        address = detect_local_address()
+
+        if address is None:
+            if not logged_wait or candidate is not None:
+                log.info("Waiting for a usable network address before starting HAP")
+            candidate = None
+            streak = 0
+            logged_wait = True
+        elif address == candidate:
+            streak += 1
+        else:
+            candidate = address
+            streak = 1
+            log.info(
+                f"Detected local address {address}; waiting for "
+                f"{stable_checks} stable check(s)"
+            )
+
+        if candidate is not None and streak >= stable_checks:
+            return candidate
+
+        if deadline is not None and time.monotonic() >= deadline:
+            return None
+
+        time.sleep(check_interval)
 
 
 class HapWatchdog:
@@ -57,7 +109,15 @@ class HapWatchdog:
     advertiser so mDNS works on the live interface again.
     """
 
-    def __init__(self, driver, check_interval: float = 15.0, grace_period: int = 2):
+    def __init__(
+        self,
+        driver,
+        check_interval: float = 15.0,
+        grace_period: int = 2,
+        address_stable_checks: int = 2,
+        refresh_cooldown: float = 60.0,
+        max_refresh_failures: int = 3,
+    ):
         self.driver = driver
         self.check_interval = max(1.0, float(check_interval))
         # Consecutive zero-connection checks tolerated before we assume HAP
@@ -68,6 +128,14 @@ class HapWatchdog:
         self._had_connection = False
         self._zero_streak = 0
         self._last_address = None
+        self.address_stable_checks = max(1, int(address_stable_checks))
+        self.refresh_cooldown = max(0.0, float(refresh_cooldown))
+        self.max_refresh_failures = max(0, int(max_refresh_failures))
+        self._pending_address = None
+        self._pending_streak = 0
+        self._last_refresh_attempt = 0.0
+        self._refresh_failure_count = 0
+        self._refresh_lock = threading.Lock()
 
     def start(self):
         # Seed with the current address so a clean start does not trigger a
@@ -156,9 +224,26 @@ class HapWatchdog:
                     "Network connectivity lost; will re-publish mDNS once it returns"
                 )
             self._last_address = None
+            self._pending_address = None
+            self._pending_streak = 0
             return
 
         if address == self._last_address:
+            self._pending_address = None
+            self._pending_streak = 0
+            return
+
+        if address == self._pending_address:
+            self._pending_streak += 1
+        else:
+            self._pending_address = address
+            self._pending_streak = 1
+
+        if self._pending_streak < self.address_stable_checks:
+            log.debug(
+                f"Detected address {address}; waiting for stability "
+                f"({self._pending_streak}/{self.address_stable_checks})"
+            )
             return
 
         if self._last_address is None:
@@ -174,6 +259,8 @@ class HapWatchdog:
 
         if self._refresh_advertisement([address]):
             self._last_address = address
+            self._pending_address = None
+            self._pending_streak = 0
 
     def _current_addresses(self):
         """Best-effort current address list for the rebuilt advertisement."""
@@ -188,22 +275,58 @@ class HapWatchdog:
             log.warning("No usable address available; deferring mDNS refresh")
             return False
 
-        loop = getattr(self.driver, "loop", None)
-        if loop is None or not loop.is_running():
-            log.warning(
-                "HAP driver event loop is not running yet; deferring mDNS refresh"
+        now = time.monotonic()
+        if (
+            self.refresh_cooldown > 0
+            and self._last_refresh_attempt > 0
+            and now - self._last_refresh_attempt < self.refresh_cooldown
+        ):
+            log.info(
+                "Skipping mDNS refresh because the previous refresh attempt was "
+                "too recent"
             )
             return False
 
-        future = asyncio.run_coroutine_threadsafe(
-            self._async_refresh_advertisement(addresses), loop
-        )
+        if not self._refresh_lock.acquire(blocking=False):
+            log.info("Skipping mDNS refresh because another refresh is still running")
+            return False
+
         try:
+            loop = getattr(self.driver, "loop", None)
+            if loop is None or not loop.is_running():
+                log.warning(
+                    "HAP driver event loop is not running yet; deferring mDNS refresh"
+                )
+                return False
+
+            self._last_refresh_attempt = now
+            future = asyncio.run_coroutine_threadsafe(
+                self._async_refresh_advertisement(addresses), loop
+            )
             future.result(timeout=30)
+            self._refresh_failure_count = 0
+            self._last_address = addresses[0]
             return True
         except Exception:
+            try:
+                future.cancel()
+            except UnboundLocalError:
+                pass
+            self._refresh_failure_count += 1
             log.exception("Failed to re-publish mDNS advertisement")
+            if (
+                self.max_refresh_failures > 0
+                and self._refresh_failure_count >= self.max_refresh_failures
+            ):
+                log.critical(
+                    "mDNS refresh failed %s consecutive time(s); exiting so the "
+                    "service manager can restart the process",
+                    self._refresh_failure_count,
+                )
+                os._exit(WATCHDOG_EXIT_CODE)
             return False
+        finally:
+            self._refresh_lock.release()
 
     async def _async_refresh_advertisement(self, addresses):
         driver = self.driver

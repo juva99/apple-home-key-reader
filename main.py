@@ -10,7 +10,7 @@ from accessory import Lock
 from repository import Repository
 from service import Service
 from remote_service import RemoteUnlockService
-from hap_watchdog import HapWatchdog
+from hap_watchdog import HapWatchdog, wait_for_stable_local_address
 from util.bfclf import BroadcastFrameContactlessFrontend
 
 # By default, this file is located in the same folder as the project
@@ -24,9 +24,7 @@ def load_configuration(path=CONFIGURATION_FILE_PATH) -> dict:
 def parse_arguments():
     parser = argparse.ArgumentParser(description="Apple Home Key Reader")
     parser.add_argument(
-        "--pair", 
-        action="store_true", 
-        help="Enable pair mode for device pairing"
+        "--pair", action="store_true", help="Enable pair mode for device pairing"
     )
     return parser.parse_args()
 
@@ -44,7 +42,12 @@ def configure_logging(config: dict):
 
 
 def configure_hap_accessory(config: dict, homekey_service=None):
-    driver = AccessoryDriver(port=config["port"], persist_file=config["persist"])
+    driver = AccessoryDriver(
+        address="0.0.0.0",
+        listen_address="0.0.0.0",
+        port=config["port"],
+        persist_file=config["persist"],
+    )
     print(config)
     print(f"gpio pin: {config.get('gpio', {}).get('pin', None)}")
     accessory = Lock(
@@ -56,6 +59,21 @@ def configure_hap_accessory(config: dict, homekey_service=None):
     )
     driver.add_accessory(accessory=accessory)
     return driver, accessory
+
+
+def wait_for_hap_network(config: dict, driver):
+    address = wait_for_stable_local_address(
+        check_interval=float(config.get("network_startup_check_interval", 2)),
+        stable_checks=int(config.get("network_address_stable_checks", 2)),
+        timeout=float(config.get("network_startup_timeout", 0) or 0),
+    )
+    if address is None:
+        raise RuntimeError("Timed out waiting for a usable network address for HAP")
+
+    driver.state.addresses = [address]
+    logging.getLogger().info(
+        f"HAP will listen on all interfaces and advertise address {address}"
+    )
 
 
 def configure_nfc_device(config: dict):
@@ -70,17 +88,17 @@ def configure_nfc_device(config: dict):
 def configure_remote_unlock_service(config: dict, lock_accessory=None):
     """Configure the remote unlock service if enabled"""
     remote_config = config.get("remote_unlock", {})
-    
+
     if not remote_config.get("enabled", False):
         logging.getLogger().info("Remote unlock service is disabled")
         return None
-    
+
     try:
         service = RemoteUnlockService(
             supabase_url=remote_config["supabase_url"],
             supabase_anon_key=remote_config["supabase_anon_key"],
             lock_id=remote_config.get("lock_id", "front-door"),
-            lock_accessory=lock_accessory
+            lock_accessory=lock_accessory,
         )
         logging.getLogger().info("Remote unlock service configured")
         return service
@@ -106,7 +124,7 @@ def configure_homekey_service(config: dict, nfc_device, repository=None):
     return service
 
 
-def main(pair_mode = False):
+def main(pair_mode=False):
     config = load_configuration()
     log = configure_logging(config["logging"])
 
@@ -123,6 +141,11 @@ def main(pair_mode = False):
     hap_watchdog = HapWatchdog(
         hap_driver,
         check_interval=float(config["hap"].get("network_watchdog_interval", 15)),
+        address_stable_checks=int(
+            config["hap"].get("network_address_stable_checks", 2)
+        ),
+        refresh_cooldown=float(config["hap"].get("network_refresh_cooldown", 60)),
+        max_refresh_failures=int(config["hap"].get("network_refresh_max_failures", 3)),
     )
 
     if pair_mode:
@@ -141,11 +164,13 @@ def main(pair_mode = False):
         )
 
     homekey_service.start()
-    
+
     # Start remote unlock service if configured
     if remote_unlock_service:
         remote_unlock_service.start()
-    
+
+    wait_for_hap_network(config["hap"], hap_driver)
+
     hap_watchdog.start()
     hap_driver.start()
 
